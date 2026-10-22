@@ -1,5 +1,21 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+### UPDATE 2026-10-22 (A618 GMU firmware component)
+
+- Owner supplied an additional roadmap from another chat. Treat its boot/eight-core/UI results as historical upstream evidence, not newly reproduced handset results; its app crash causes also need verification against the actual image/logs. Current implementation priority remains native Wi-Fi and GPU, not replacing Wi-Fi with USB Ethernet.
+- Read-only Termux SSH confirmed the actual GPU firmware files: `/vendor/firmware/a618_gmu.bin` (32,768 bytes), `/vendor/firmware/a630_sqe.fw` (32,136 bytes), and a615 zap files. Listed/copied only GPU firmware into ignored local `research/gpu-firmware`; no calibration/board data or firmware is committed. Initial filename query incorrectly expanded a shell variable outside `su`; the corrected literal-path query confirmed the files. No absence conclusion was drawn from that failed query.
+- Local file hashes: GMU `9ef10b2b179054fb57af25008e29feb24300c2eaaeabf907bd741786bbacbf2e`; SQE `36298bd53ea3666413d288a3a3f5266f67fcb6db038a0a481af5869d1c17859c`. Pinned sweet `adreno-gpulist.h` selects these names, A615-family includes A618, and its legacy GMU load limit is 32 KiB. GMU-relative ITCM/SYSRESET offsets derive from the live GMU resource and KGSL's GPU-relative register conversion; no A530 addresses were reused.
+- Implemented independent MIT `xnu/adreno618/firmware.{c,h}` (patch/stage 0086): bounded MMIO upload into CM3 ITCM, correct LE words, A618 chip-family check, reset-state guard, optional full readback and ARM64 `dsb sy`; it never changes reset or starts GMU. A separate bounded SQE view removes exactly the four-byte file header. All input validation precedes register access; caller must first implement safe power/clocks/mapping/serialization. There is no startup caller and no handset MMIO access was performed.
+- Three C11/C++14 host test groups passed on inert register RAM: ITCM-only writes/reset preservation, full/small/unaligned-source upload, invalid lengths/maps/chips/aliasing, running-GMU rejection and SQE bounds/output preservation. Also built the actual source as a local DLL and tested the handset blobs on inert RAM: all 32,768 GMU bytes round-trip exactly and reset stays asserted; SQE yields exactly 32,132 unchanged code bytes. This does not execute firmware or prove it starts on XNU.
+- The A618 source cross-compiles with real XNU headers as a freestanding ARM64 Mach-O object. Next validation is the full host suite/repository checks and kernel CI with patch 0086; no successful full 0086 build is claimed yet. GPUCC/GDSC, HFI, zap/TrustZone, SMMU/BOs, submission/fences, IOSurface and GLES integration remain unfinished.
+- Complete local validation after 0086: 77 host tests passed without skips; validator passed 86 patches, 18 Python tools and 10 shell scripts; both workflow YAML files parse; `git diff --check` is clean. Patch 0086 passes `git apply --check` on the XNU source with 0085 applied.
+
+### OWNER USB REQUEST 2026-10-22
+
+- User wants system diagnostic access through USB and is willing to erase data for a future installation after emulation reaches an acceptable state. This is conditional future intent, not approval to erase or flash now. Preserve the present no-flashing/no-destructive-commands restriction until a concrete install is reviewed and authorized.
+- Emulator checks can validate modeled boot/userland behavior, not physical WCN3990, A618/GMU or panel 120 Hz. Do not present emulator success as hardware readiness.
+- Windows currently has no `adb` in PATH/workspace and no present Android/ADB/Xiaomi/Redmi USB device was detected (only unrelated spacedesk Android Control). Asked user to connect a data cable and enable USB debugging; preparing official Platform-Tools while waiting. Plan: ADB USB forwarding to the already authenticated Termux sshd, retaining host-key verification and existing KernelSU permissions, for consolidated read-only system diagnostics. No new phone partition writes are needed.
+
 ### UPDATE 2026-10-22 (SMEM private-heap lookup connected to GLINK)
 
 - GLINK ring transport committed/pushed as `5fb00f5`. Linux/Windows host CI runs `39773242446` and `39773237099` passed; full kernel run `39773242460` is still in progress at this milestone.

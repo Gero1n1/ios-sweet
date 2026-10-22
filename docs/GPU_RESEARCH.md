@@ -75,4 +75,7 @@ Hardware reference sources:
 5. Connect presentation to the sweet display path. Physical 120 Hz separately
    requires panel/DSI/DSC mode programming and device measurements.
 
-Currently no A618 GPU driver or iOS GPU integration is implemented here.
+The first component now exists in [`xnu/adreno618`](../xnu/adreno618/README.md):
+bounded legacy GMU upload while reset is held, plus SQE file-header handling.
+It has no startup caller, power/clock setup or rendering functionality. This is
+not a working GPU driver or iOS GPU integration.

@@ -20,6 +20,7 @@ on:
     paths:
       - "xnu/patches/**"
       - "xnu/wcn3990/**"
+      - "xnu/adreno618/**"
       - "tools/apply-xnu-patches.py"
       - "tools/prepare-xnu-build.py"
       - "tools/mkpayload.py"
@@ -32,6 +33,7 @@ on:
     paths:
       - "xnu/patches/**"
       - "xnu/wcn3990/**"
+      - "xnu/adreno618/**"
       - "tools/apply-xnu-patches.py"
       - "tools/prepare-xnu-build.py"
       - "tools/mkpayload.py"
@@ -73,6 +75,8 @@ jobs:
           cp xnu/patches/*.patch xnu/patches/*.sh dxb/patches/
           mkdir -p dxb/patches/sweet-wcn3990
           cp xnu/wcn3990/*.[ch] dxb/patches/sweet-wcn3990/
+          mkdir -p dxb/patches/sweet-adreno618
+          cp xnu/adreno618/*.[ch] dxb/patches/sweet-adreno618/
           # DXB normally skips failed patches. Every SWEET patch must apply.
           cp tools/apply-xnu-patches.py dxb/sweet-apply-patches.py
           python3 - <<'PY'

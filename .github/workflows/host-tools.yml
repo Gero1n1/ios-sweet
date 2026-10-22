@@ -2,9 +2,9 @@ name: host-tools
 
 on:
   push:
-    paths: ['tools/**', 'tests/**', 'xnu/patches/**', 'xnu/wcn3990/**', 'install-windows10.bat', '.github/workflows/host-tools.yml']
+    paths: ['tools/**', 'tests/**', 'xnu/patches/**', 'xnu/wcn3990/**', 'xnu/adreno618/**', 'install-windows10.bat', '.github/workflows/host-tools.yml']
   pull_request:
-    paths: ['tools/**', 'tests/**', 'xnu/patches/**', 'xnu/wcn3990/**', 'install-windows10.bat', '.github/workflows/host-tools.yml']
+    paths: ['tools/**', 'tests/**', 'xnu/patches/**', 'xnu/wcn3990/**', 'xnu/adreno618/**', 'install-windows10.bat', '.github/workflows/host-tools.yml']
   workflow_dispatch:
 
 permissions:
