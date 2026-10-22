@@ -196,6 +196,18 @@ Not in git: partition backups, live device trees, recovery images, Apple firmwar
 | 0066–0067 | Fault-region crash info; console mute |
 | 0068 | IOSurface lookup semantics for already-mapped surfaces |
 | 0069 | Batched persistent-log flushes |
+| 0070–0071 | App hibernation syscall and edge gesture event flags |
+| 0072–0077 | DWC3/CDC-ECM USB bring-up and live kernel log transport |
+| 0078–0081 | Eight-core CPU selection, framebuffer power transition, network tracing and USB link state |
+| 0082 | Fractional CPU framebuffer-copy cadence; no physical panel mode switch |
+| 0083 | Build the initial WLFW/QMI wire codec; no radio startup or working Wi-Fi yet |
+
+Host checks: `python3 tools/validate-repo.py` and
+`python3 -m unittest discover -s tests -v`. Bash, Git and a C/C++ compiler are
+needed for all checks. They validate tools, patch consistency and protocol
+components; they do not validate a complete XNU build or sweet hardware.
+The kernel workflow now stops on any failed required project patch and saves
+the applied patch hashes in `sweet-patches.json` with the build artifacts.
 
 ## Key hardware facts
 

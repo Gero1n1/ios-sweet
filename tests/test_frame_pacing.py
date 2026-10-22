@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TARGETS = ('iokit/Kernel/arm/SweetFramebuffer.cpp', 'iokit/Kernel/arm/SweetFramePacing.h')
 
 
-@unittest.skipUnless(shutil.which('patch') and shutil.which('cc'), 'requires patch and a host C compiler')
+@unittest.skipUnless(shutil.which('git') and shutil.which('cc'), 'requires git and a host C compiler')
 class FramePacingTests(unittest.TestCase):
     def test_patch_chain_and_cadence_invariants(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -21,7 +21,9 @@ class FramePacingTests(unittest.TestCase):
                 for section in sections:
                     if not any('\n+++ b/' + target + '\n' in section for target in TARGETS):
                         continue
-                    result = subprocess.run(['patch', '--batch', '--fuzz=0', '-p1'],
+                    # git apply requires exact context and is available on Windows;
+                    # BusyBox patch lacks GNU patch's --batch/--fuzz flags.
+                    result = subprocess.run(['git', 'apply', '--no-index', '--whitespace=nowarn', '-p1'],
                                             input=section, cwd=path, text=True, capture_output=True)
                     self.assertEqual(result.returncode, 0, f'{patch.name}: {result.stdout}{result.stderr}')
             source = path / 'check.c'

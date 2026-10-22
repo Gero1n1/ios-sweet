@@ -19,6 +19,9 @@ on:
     branches: [main]
     paths:
       - "xnu/patches/**"
+      - "xnu/wcn3990/**"
+      - "tools/apply-xnu-patches.py"
+      - "tools/prepare-xnu-build.py"
       - ".github/workflows/xnu.yml"
 
 concurrency:
@@ -48,6 +51,16 @@ jobs:
           git -C dxb checkout -q FETCH_HEAD
           # 12.5-14.3 use the top-level patches dir; ours go next to blacktop's
           cp xnu/patches/*.patch xnu/patches/*.sh dxb/patches/
+          mkdir -p dxb/patches/sweet-wcn3990
+          cp xnu/wcn3990/wlfw_wire.c xnu/wcn3990/wlfw_wire.h dxb/patches/sweet-wcn3990/
+          # DXB normally skips failed patches. Every SWEET patch must apply.
+          cp tools/apply-xnu-patches.py dxb/sweet-apply-patches.py
+          python3 - <<'PY'
+          from pathlib import Path
+          names = sorted(p.name for p in Path('xnu/patches').glob('*.patch'))
+          Path('dxb/sweet-required-patches.txt').write_text('\n'.join(names) + '\n')
+          PY
+          python3 tools/prepare-xnu-build.py dxb/build.sh
           # libfirehose_kernel is built arm64e-only; the SWEET kernel is plain arm64
           sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
           grep -c 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh
@@ -112,6 +125,7 @@ jobs:
         if: always()
         run: |
           mkdir -p out
+          cp dxb/sweet-patches.json out/ 2>/dev/null || true
           cp -R dxb/fakeroot/System/Library/Kernels/. out/ 2>/dev/null || true
           ls -la out
           (cd out && shasum -a 256 kernel.* > SHA256SUMS) || true

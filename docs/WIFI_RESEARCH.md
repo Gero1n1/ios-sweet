@@ -35,11 +35,35 @@ Do not claim Wi-Fi support from a registry-only IOKit object or a visible `en0`/
 
 ## Current build constraint
 
-Local `clang`, `xcrun`, and a generated XNU build tree are absent. The configured GitHub Actions token currently returns HTTP 401, so an XNU build cannot be launched from this workspace until build access is restored. No device partition has been changed.
+As of 2026-10-22, local GCC/Bash host checks work and GitHub CLI authentication is available for the user's fork. The previous environment's HTTP 401 no longer describes this workspace. A generated XNU build tree, full kernel compilation and sweet boot verification are still pending. No device partition has been changed.
+
+## Implemented protocol milestone (2026-10-22)
+
+[`xnu/wcn3990`](../xnu/wcn3990/README.md) contains an independent C WLFW/QMI wire
+codec, staged into XNU by patch 0083. It encodes the initial registration and
+MSA requests, parses replies, and validates firmware-proposed regions against
+the caller's live-DT MSA reservation. Host tests compile and execute the actual
+code as C and C++, including malformed packets and memory-boundary cases.
+The driver does not call it to start the radio yet. QRTR/GLINK, power,
+hypervisor assignment, firmware/board-data loading, CE/WMI/HTT and the iOS ABI
+remain implementation work. No initialization request was sent to the Android
+service, which already owns the radio.
 
 ## Live Android band report from sweet
 
 The user's `dumpsys wifi` output reports 2.4 GHz channels 1–13 and 5 GHz channels 36, 40, 44, 48, 52, 56, 60, and 64; 6 GHz/60 GHz channel lists are empty. Android reports driver country code `AZ`. This confirms the currently running Android Wi-Fi stack advertises 5 GHz on this exact handset. It does not confirm which firmware build string is embedded in `wlanmdsp.mbn`, nor does it establish channel availability under iOS until its regulatory path is implemented.
+
+### Rooted live inventory over Termux SSH (2026-10-22)
+
+A read-only script was run through SSH as Termux with KernelSU root on the user's still-stock MIUI device. This verifies the inventory against the running handset without installing or booting ios-sweet:
+
+- Android reports `wlan0`, `wlan1`, and `p2p0` on `phy0`; all three resolve to the ICNSS platform driver at `/sys/devices/platform/soc/18800000.qcom,icnss`. `wlan0` was up and associated at capture time.
+- `iw phy` listed 2.4 GHz channels 1–13; channel 14 was disabled. It listed 5 GHz channels 36–64, with 52–64 marked for radar detection; channels 100–173 were disabled in the active regulatory state. This is the Android driver's current channel table, not a promise of iOS regulatory behavior or a test of every channel.
+- Read-only filename listing confirmed `/vendor/firmware_mnt/image/wlanmdsp.mbn`, `bdwlan.bin`, and multiple `bdwlan.*` files. File contents and calibration values were not read or copied. No exact firmware release was extracted from the binary.
+- The live tree contains `/soc/qcom,icnss@18800000`, `/soc/slim@62e40000/wcn3990`, `/soc/bt_wcn3990`, and `/reserved-memory/wlan_msa_region@97500000`. The ICNSS path and WLAN MSA facts corroborate the earlier FDT inventory.
+- All eight Android CPUs (0–7) were online; `MemTotal` was 5,635,476 kB. These Android resource figures do not establish the memory map or CPU support available to XNU.
+- `ro.build.version.release` returned `16`, while the build fingerprint and user-reported ROM identify Android 13 (`...sweet:13/...`). Preserve this property inconsistency as an observation; do not revise the ROM identification on that basis alone.
+- The filtered root kernel-message query returned no matching ICNSS/WCN/QMI lines during this read. That absence does not establish firmware or driver failure.
 
 ## Sweet ICNSS resources in the public device tree
 
