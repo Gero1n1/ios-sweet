@@ -26,12 +26,14 @@ MSA-ready, and handle cleanup if subsequent initialization fails.
 Patch 0083 adds the C file to the XNU build, and `0083-stage-wlfw.sh` copies these
 canonical sources into `bsd/dev/sweet_wcn3990` during CI staging. The C code is
 enabled for the SWEET kernel only (and for standalone host tests). No caller
-starts a radio or sends messages yet. Full XNU compilation is still unverified.
+starts a radio or sends messages yet. Full XNU build/link with the codec passed
+in [run 39768956686](https://github.com/Gero1n1/ios-sweet/actions/runs/39768956686);
+the build log confirms `wlfw_wire.c` compilation. This is not a phone test.
 The staged translation unit was cross-compiled to a Mach-O ARM64 object with
 the actual XNU headers using Zig 0.17.0's Clang frontend (`KERNEL` and
 `ARM64_BOARD_CONFIG_SWEET`, freestanding, no SDK includes). Its seven public
 functions are present with no undefined symbols. This is a single-file check,
-not a full XNU build or device test.
+a single-file check; the later full build is recorded above.
 Host compilation and schema fixtures do not test a radio, firmware boot, QRTR
 transport or Apple's Wi-Fi ABI. The
 remaining driver needs power/remoteproc, SMEM/GLINK or the applicable IPC
@@ -57,3 +59,31 @@ python3 -m unittest discover -s tests -v
 ```
 
 This is a codec milestone, not working Wi-Fi support.
+
+## GLINK mapped-ring transport
+
+`glink_smem.c` now moves frames through already-mapped shared-memory FIFOs.
+Patch 0084 adds it to the SWEET kernel build. It binds the 32-byte descriptor
+from SMEM item 478 and TX/RX items 479/480, with AP-owned TX head and RX tail;
+it never resets the remote-owned indices. It implements:
+
+- wrapped TX/RX copying and 8-byte frame alignment;
+- 8-byte full/empty reserve plus 8 bytes for `READ_NOTIF` while blocked;
+- publication of payload/head before a caller-supplied mailbox notification;
+- separate RX peek and consume, malformed-index rejection and bounded access;
+- outer-shareable ARM64 barriers (`dmb osh`) for the AP/DSP memory boundary.
+
+The platform must supply shared non-cacheable mappings, SMEM allocation under
+the correct remote lock, mailbox and IRQ handling, and restart/lifetime
+synchronization. The implementation is not bound to physical hardware yet.
+Native GLINK version/channel/intent negotiation, QRTR and remote-processor
+startup remain missing. It cannot yet carry WLFW messages on the handset.
+No caller has sent a command to Android's live firmware.
+
+Protocol layout was checked against the pinned sweet
+[GLINK SMEM transport](https://github.com/ArrowOS-Devices/android_kernel_xiaomi_sweet/blob/b2dab9baf54310ed2987689f8398a75836f3bd22/drivers/rpmsg/qcom_glink_smem.c).
+The implementation is independent MIT code; Linux implementation code is not
+incorporated. Host tests exercise the actual C/C++ transport using memory-backed
+rings, including every aligned head/tail pair in a 64-byte FIFO, frame lengths
+8–65, padding, saturation, notification reserve, corruption and callback order.
+Those tests do not verify cache attributes or ordering against a real DSP.

@@ -1,15 +1,20 @@
 #!/bin/bash
-# Stage the repository's portable codec before DXB applies the patch series.
+# Stage the repository's WLAN protocol/transport sources before patching XNU.
 set -euo pipefail
 
 source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sweet-wcn3990"
 target=bsd/dev/sweet_wcn3990
 [[ -f bsd/conf/files ]] || { echo 'Not an XNU source root' >&2; exit 1; }
 [[ ! -e "$target" ]] || { echo "Refusing to overwrite $target" >&2; exit 1; }
-[[ -f "$source_dir/wlfw_wire.c" && -f "$source_dir/wlfw_wire.h" ]] || {
-    echo 'Missing canonical WLFW codec sources beside the staging script' >&2
-    exit 1
-}
+sources=(wlfw_wire.c wlfw_wire.h glink_smem.c glink_smem.h)
+for source in "${sources[@]}"; do
+    [[ -f "$source_dir/$source" ]] || {
+        echo "Missing canonical WLAN source: $source" >&2
+        exit 1
+    }
+done
 mkdir -p "$target"
-cp "$source_dir/wlfw_wire.c" "$source_dir/wlfw_wire.h" "$target/"
-echo 'Staged WLFW wire codec; no transport or hardware initialization is implemented'
+for source in "${sources[@]}"; do
+    cp "$source_dir/$source" "$target/"
+done
+echo 'Staged WLFW and GLINK FIFO transport; platform binding/radio startup are not implemented'

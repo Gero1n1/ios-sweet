@@ -35,7 +35,7 @@ Do not claim Wi-Fi support from a registry-only IOKit object or a visible `en0`/
 
 ## Current build constraint
 
-As of 2026-10-22, local GCC/Bash host checks work and GitHub CLI authentication is available for the user's fork. The previous environment's HTTP 401 no longer describes this workspace. A generated XNU build tree, full kernel compilation and sweet boot verification are still pending. No device partition has been changed.
+As of 2026-10-22, local GCC/Bash host checks work and GitHub CLI authentication is available for the user's fork. The previous environment's HTTP 401 no longer describes this workspace. Full XNU build/link succeeded in run `39768956686`, and its generated build tree is available locally. Sweet boot verification remains pending. No device partition has been changed.
 
 ## Implemented protocol milestone (2026-10-22)
 
@@ -44,7 +44,11 @@ codec, staged into XNU by patch 0083. It encodes the initial registration and
 MSA requests, parses replies, and validates firmware-proposed regions against
 the caller's live-DT MSA reservation. Host tests compile and execute the actual
 code as C and C++, including malformed packets and memory-boundary cases.
-The driver does not call it to start the radio yet. QRTR/GLINK, power,
+The driver does not call it to start the radio yet. Patch 0084 now adds an
+independent GLINK mapped-ring transport: wrapped FIFO I/O, reserved notification
+space, bounded indices and outer-shareable barriers. Its C/C++ tests use memory
+backed rings, not the phone. Physical SMEM allocation/mapping, mailbox/IRQ binding,
+native GLINK channel/intent negotiation, QRTR, power,
 hypervisor assignment, firmware/board-data loading, CE/WMI/HTT and the iOS ABI
 remain implementation work. No initialization request was sent to the Android
 service, which already owns the radio.
