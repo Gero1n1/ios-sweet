@@ -19,8 +19,11 @@ framebuffer using its iso_font into fb.txt and write result.json. This is a
 snapshot of the circular screen, not a complete boot log. --fail-on-panic
 returns 2 when a panic is visible; absence of a panic does not prove boot.
 An undecodable or blank screen returns 3 with --fail-on-panic.
+Windows uses loopback TCP QMP and needs an ASCII output path. No llvm-nm is
+required. The default debug-log cap is 64 MiB. --icount-shift is an explicit
+instruction-clock experiment, not a performance or hardware timing test.
 """
-import argparse, json, os, shutil, socket, struct, subprocess, sys, time, zlib
+import argparse, hashlib, json, math, os, shutil, socket, struct, subprocess, sys, time, zlib
 
 FB_BASE, FB_W, FB_H = 0x9c000000, 1080, 2400
 FB_STRIDE = FB_W * 4
@@ -59,19 +62,56 @@ def check_qemu_dependency(cpu='cortex-a76'):
 
 
 def check_kernel_tools(kernel_path):
-    """Verify llvm-nm is available when --kernel is specified."""
-    if not shutil.which('llvm-nm'):
-        print('[!] Error: llvm-nm not found in PATH, required for --kernel font extraction.', file=sys.stderr)
-        print('    Install instructions:', file=sys.stderr)
-        print('      Arch Linux:    sudo pacman -S llvm', file=sys.stderr)
-        print('      Ubuntu/Debian: sudo apt install llvm', file=sys.stderr)
-        print('      Fedora:         sudo dnf install llvm', file=sys.stderr)
-        print('      macOS:          brew install llvm', file=sys.stderr)
-        return False
+    """Font lookup reads LC_SYMTAB directly, without external LLVM tools."""
     if not os.path.isfile(kernel_path):
         print(f'[!] Error: kernel file does not exist: {kernel_path}', file=sys.stderr)
         return False
     return True
+
+
+def kernel_font_address(kernel):
+    """Find the one defined _iso_font in a bounded ARM64 Mach-O symbol table."""
+    def span(offset, size):
+        if offset > len(kernel) or size > len(kernel) - offset:
+            raise ValueError('truncated Mach-O font metadata')
+
+    span(0, 32)
+    magic, cpu, _, _, count, size = struct.unpack_from('<6I', kernel)
+    if magic != 0xfeedfacf or cpu != 0x100000c or count > size // 8:
+        raise ValueError('expected a 64-bit ARM Mach-O kernel')
+    span(32, size)
+    pos, end, tables = 32, 32 + size, []
+    for _ in range(count):
+        if end - pos < 8:
+            raise ValueError('truncated Mach-O load command')
+        cmd, length = struct.unpack_from('<2I', kernel, pos)
+        if length < 8 or length % 8 or length > end - pos:
+            raise ValueError('invalid Mach-O load command size')
+        if cmd == 2:
+            if length != 24:
+                raise ValueError('invalid LC_SYMTAB size')
+            tables.append(struct.unpack_from('<4I', kernel, pos + 8))
+        pos += length
+    if pos != end or len(tables) != 1:
+        raise ValueError('kernel needs exactly one LC_SYMTAB')
+    symbols, number, strings, string_bytes = tables[0]
+    span(symbols, number * 16)
+    span(strings, string_bytes)
+    found = []
+    for i in range(number):
+        name, kind, section, _, address = struct.unpack_from('<IBBHQ', kernel, symbols + i * 16)
+        if kind & 0xe0 or kind & 0x0e != 0x0e or not section:
+            continue  # Debug and undefined entries are not font definitions.
+        if name >= string_bytes:
+            raise ValueError('symbol name is outside Mach-O string table')
+        stop = kernel.find(b'\0', strings + name, strings + string_bytes)
+        if stop < 0:
+            raise ValueError('unterminated Mach-O symbol name')
+        if kernel[strings + name:stop] == b'_iso_font':
+            found.append(address)
+    if len(found) != 1:
+        raise ValueError('kernel must contain exactly one defined _iso_font symbol')
+    return found[0]
 
 
 def build_image(payload):
@@ -163,32 +203,42 @@ def screen_result(screen, unknown):
 
 def qmp(sock_path, *cmds, pmemsave=None):
     """Run QEMU human-monitor commands over QMP (synchronous, unlike the echoing HMP socket)."""
-    s = socket.socket(socket.AF_UNIX)
-    s.connect(sock_path)
+    s = socket.socket(socket.AF_INET if isinstance(sock_path, tuple) else socket.AF_UNIX)
+    s.settimeout(10)
+    try:
+        s.connect(sock_path)
+    except BaseException:
+        s.close()
+        raise
     f = s.makefile('rw')
-    f.readline()
 
     def call(execute, **args):
         f.write(json.dumps({'execute': execute, 'arguments': args}) + '\n')
         f.flush()
         while True:
-            r = json.loads(f.readline())
+            line = f.readline()
+            if not line:
+                raise RuntimeError('QMP closed before replying')
+            r = json.loads(line)
             if 'return' in r or 'error' in r:
+                if 'error' in r:
+                    raise RuntimeError(f'QMP {execute}: {r["error"]}')
                 return r
-
-    call('qmp_capabilities')
-    out = []
-    for c in cmds:
-        r = call('human-monitor-command', **{'command-line': c})
-        if 'error' in r:
-            print(f'qmp {c!r}: {r["error"]}', file=sys.stderr)
-        out.append(r.get('return', ''))
-    if pmemsave:	# native QMP: HMP's argument parser chokes on '-' in paths
-        r = call('pmemsave', val=pmemsave[0], size=pmemsave[1], filename=pmemsave[2])
-        if 'error' in r:
-            print(f'qmp pmemsave: {r["error"]}', file=sys.stderr)
-    s.close()
-    return out
+    try:
+        greeting = json.loads(f.readline())
+        if 'QMP' not in greeting:
+            raise RuntimeError('missing QMP greeting')
+        call('qmp_capabilities')
+        out = []
+        for c in cmds:
+            r = call('human-monitor-command', **{'command-line': c})
+            out.append(r['return'])
+        if pmemsave:  # native QMP avoids HMP filename quoting problems
+            call('pmemsave', val=pmemsave[0], size=pmemsave[1], filename=pmemsave[2])
+        return out
+    finally:
+        f.close()
+        s.close()
 
 
 def stream_serial_file(serial_path, file_pos, out_stream=sys.stdout):
@@ -224,7 +274,10 @@ def main():
     ap.add_argument('--gdb', action='store_true', help='start halted, gdb stub on :1234, no timeout')
     ap.add_argument('--hmp', action='append', default=[], help='extra monitor command run after stop (repeatable), e.g. "x /8gx 0xfffffe..."')
     ap.add_argument('--cpu', default='cortex-a76', help='QEMU CPU model (default: cortex-a76)')
-    ap.add_argument('--kernel', help='matching unstripped kernel, for exact framebuffer text decoding (uses llvm-nm)')
+    ap.add_argument('--kernel', help='matching unstripped ARM64 Mach-O kernel, for exact framebuffer text decoding')
+    ap.add_argument('--max-log-mib', type=int, default=64, help='stop if the QEMU debug log reaches this limit (default: 64 MiB)')
+    ap.add_argument('--icount-shift', type=int, choices=range(11),
+                    help='TCG instruction-clock experiment (0..10), not hardware timing or performance')
     ap.add_argument('--fail-on-panic', action='store_true', help='exit 2 for a visible panic, 3 for incomplete/blank decoding; requires --kernel')
     ap.add_argument('--live-serial', action='store_true', help='stream serial console output to stdout in real time')
     ap.add_argument('--check-env', action='store_true', help='check QEMU installation and dependencies without running a payload')
@@ -232,10 +285,6 @@ def main():
 
     if a.check_env:
         ok = check_qemu_dependency(a.cpu)
-        if shutil.which('llvm-nm'):
-            print('[*] llvm-nm found in PATH', file=sys.stderr)
-        else:
-            print('[!] Optional: llvm-nm not found (needed only when using --kernel for text decoding)', file=sys.stderr)
         return 0 if ok else 1
 
     if not a.payload or not a.outdir:
@@ -243,6 +292,13 @@ def main():
 
     if a.fail_on_panic and not a.kernel:
         ap.error('--fail-on-panic requires --kernel')
+    if not math.isfinite(a.secs) or a.secs <= 0 or a.max_log_mib <= 0:
+        ap.error('--secs and --max-log-mib must be positive and finite')
+    out = os.path.abspath(a.outdir)
+    if os.name == 'nt' and not out.isascii():
+        ap.error('Windows QEMU needs an ASCII output path, e.g. E:/ios-sweet-qemu-test')
+    if os.path.exists(out) and (not os.path.isdir(out) or os.listdir(out)):
+        ap.error('outdir must be new or empty to preserve previous results')
 
     if not check_qemu_dependency(a.cpu):
         return 1
@@ -253,48 +309,64 @@ def main():
     payload = open(a.payload, 'rb').read()
     font = None
     if a.kernel:
-        symbols = subprocess.check_output(['llvm-nm', '--defined-only', a.kernel], text=True)
-        fonts = [int(line.split()[0], 16) for line in symbols.splitlines()
-                 if line.split()[-1:] == ['_iso_font']]
-        if len(fonts) != 1:
-            ap.error('kernel must contain exactly one _iso_font symbol')
-        font = payload_data(payload, fonts[0], 256 * 16)
+        try:
+            address = kernel_font_address(open(a.kernel, 'rb').read())
+            font = payload_data(payload, address, 256 * 16)
+        except ValueError as error:
+            ap.error(str(error))
     os.makedirs(a.outdir, exist_ok=True)
-    out = os.path.abspath(a.outdir)
 
     phys_base, img, ba_pa, entry_pa = build_image(payload)
     open(f'{out}/ram.bin', 'wb').write(img)
     open(f'{out}/stub.bin', 'wb').write(stub(ba_pa, entry_pa))
     print(f'phys_base={phys_base:#x} boot_args={ba_pa:#x} entry={entry_pa:#x}', file=sys.stderr)
 
-    mon = f'{out}/mon.sock'
-    if os.path.exists(mon):
-        os.unlink(mon)
+    if os.name == 'nt':
+        # Windows builds need TCP QMP. Bind loopback only, never the LAN.
+        with socket.socket() as reserve:
+            reserve.bind(('127.0.0.1', 0))
+            mon = reserve.getsockname()
+        qmp_arg = f'tcp:{mon[0]}:{mon[1]},server=on,wait=off'
+    else:
+        mon = f'{out}/mon.sock'
+        qmp_arg = f'unix:{mon},server=on,wait=off'
     # virt RAM starts at 0x40000000: cover the payload's RAM (mkadt.py --highmem needs 8G).
     mem_size = struct.unpack_from('<Q', payload, 0x40)[0]
     ram_gib = max(4, -(-(phys_base + mem_size - 0x40000000) // (1 << 30)))
     cmd = ['qemu-system-aarch64', '-M', 'virt,gic-version=3', '-cpu', a.cpu, '-smp', '1', '-m', f'{ram_gib}G',
-           '-nographic', '-serial', f'file:{out}/serial.txt', '-qmp', f'unix:{mon},server,nowait',
+           '-display', 'none', '-monitor', 'none', '-nic', 'none',
+           '-serial', f'file:{out}/serial.txt', '-qmp', qmp_arg,
            '-d', 'int,guest_errors,unimp', '-D', f'{out}/qemu.log', '-no-reboot',
            '-device', f'loader,file={out}/ram.bin,addr={phys_base:#x},force-raw=on',
            '-device', f'loader,file={out}/stub.bin,addr={STUB_PA:#x},force-raw=on',
            '-device', f'loader,addr={STUB_PA:#x},cpu-num=0']
     if a.gdb:
-        cmd += ['-S', '-gdb', 'tcp::1234']
+        cmd += ['-S', '-gdb', 'tcp:127.0.0.1:1234']
+    if a.icount_shift is not None:
+        cmd += ['-accel', 'tcg,thread=single', '-icount',
+                f'shift={a.icount_shift},align=off,sleep=off', '-rtc', 'clock=vm']
+    with open(f'{out}/command.json', 'w', encoding='utf-8') as command_file:
+        json.dump(cmd, command_file, indent=2)
 
     p = None
     serial_file = f'{out}/serial.txt'
     serial_pos = 0
 
     try:
-        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
+        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         if a.gdb:
             print('gdb stub on :1234; QMP socket:', mon, file=sys.stderr)
             p.wait()
             return 0
 
-        t0 = time.time()
-        while p.poll() is None and time.time() - t0 < a.secs:
+        t0 = time.monotonic()
+        log_limited = False
+        while p.poll() is None and time.monotonic() - t0 < a.secs:
+            log_path = f'{out}/qemu.log'
+            if os.path.exists(log_path) and os.path.getsize(log_path) >= a.max_log_mib << 20:
+                log_limited = True
+                break
             if a.live_serial:
                 serial_pos = stream_serial_file(serial_file, serial_pos)
             time.sleep(0.2)
@@ -319,6 +391,11 @@ def main():
         else:
             print(f'qemu exited early: {p.returncode}', file=sys.stderr)
 
+        result.update(payload_sha256=hashlib.sha256(payload).hexdigest(),
+                      wall_seconds=time.monotonic() - t0, log_limit_reached=log_limited,
+                      hardware_not_tested=True, icount_shift=a.icount_shift)
+        if a.kernel:
+            result['kernel_sha256'] = hashlib.sha256(open(a.kernel, 'rb').read()).hexdigest()
         open(f'{out}/result.json', 'w').write(json.dumps(result, indent=2) + '\n')
         print(json.dumps(result), file=sys.stderr)
         print(f'{out}/fb.png  {out}/regs.txt  {out}/qemu.log', file=sys.stderr)
@@ -328,6 +405,8 @@ def main():
             return 3
         if result['status'] == 'qemu_exited':
             return 1
+        if log_limited:
+            return 3
         return 0
 
     except KeyboardInterrupt:
@@ -337,6 +416,9 @@ def main():
             p.wait()
         return 130
     finally:
+        if p and p.poll() is None:
+            p.kill()
+            p.wait()
         ram_file = f'{out}/ram.bin'
         if os.path.exists(ram_file):
             try:

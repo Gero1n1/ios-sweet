@@ -10,7 +10,7 @@ As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock 
 
 The boot and hardware results below are the upstream author's historical results.
 For the current owner's handset, still running Android, the 2026-10-22 checks
-confirm a successful full XNU build, 85 local host tests and safe upper-RAM
+confirm a successful full XNU build, 95 local host tests and safe upper-RAM
 selection from its live device tree. A 90-second Windows QEMU run reached a
 minimal test PID 1 on a RAM disk; this did not run Apple's iOS userland or model
 the phone's Wi-Fi/GPU. This kernel has not been booted on that handset.
@@ -167,7 +167,11 @@ The log contains crash reports with backtraces (`CRASH name ...`), IOKit traces 
 
 ### QEMU
 
-`tools/qemu-sweet.py` boots the same kernel on QEMU `virt` with a test RAM-disk root. It is useful for kernel-only changes; see `NOTES.md`.
+`tools/qemu-sweet.py` boots the same kernel on QEMU `virt` with a test RAM-disk root.
+See [the Windows small-test instructions](docs/EMULATION.md) for the minimal
+PID 1, output files and clock limitations. An initial run reached PID 1, but
+a repeat hit the interrupt-disabled watchdog; stable emulator boot is not yet
+established. This does not test the handset's Wi-Fi, GPU or physical display.
 
 ## Repository layout
 
