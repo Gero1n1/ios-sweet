@@ -4,7 +4,7 @@
 
 This project ports Apple's open-source XNU kernel (xnu-8796, the iOS 16 generation) to the Xiaomi Redmi Note 10 Pro (`sweet`, Qualcomm SM7150 / Snapdragon 732G). On top of it runs the **unmodified iOS 16.7.16 (20H392) userland of the iPhone X**: launchd, the system daemons, backboardd, SpringBoard and the stock apps.
 
-As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock it, open Settings, pull down Control Center and the notification center, and use the touchscreen and the hardware buttons. Rendering runs entirely on the CPU; there is no GPU driver.
+As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock it, open Settings, pull down Control Center and the notification center, use gesture navigation, and use the touchscreen and hardware buttons. The latest recorded kernel enables all eight CPU cores. Rendering runs entirely on the CPU; there is no GPU driver.
 
 > Experimental bring-up, not a usable phone OS. Many things are missing or stubbed (see below), and Apple's security model is mostly switched off. It installs into the `userdata` partition and so **erases Android's user data**.
 
@@ -13,8 +13,8 @@ As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock 
 | Area | State |
 | --- | --- |
 | Boot | Stock Xiaomi bootloader → `fastboot boot` of our shim → XNU. Nothing is flashed to the boot partitions |
-| CPU | 6 of the 8 cores (the six Cortex-A55s) via PSCI, 16K pages, GICv3 interrupts, timers |
-| Memory | About 3.95 GiB of the upper DDR bank |
+| CPU | All 8 cores (six Cortex-A55 and two Cortex-A76) via PSCI, 16K pages, GICv3 interrupts, timers |
+| Memory | About 3.95 GiB on the reference boot; the ADT builder can select upper DDR from a device DTB. Lower DDR and reserved regions are not all available to XNU |
 | Storage | Own UFS host driver; the iOS root is a journaled HFS+ volume in `userdata`, read/write |
 | iOS userland | Real iPhone X 16.7.16 root filesystem and shared cache; launchd and the system daemons run |
 | Display | Kernel IOSurface + IOMobileFramebuffer (`AppleCLCD`) services; CoreAnimation renders in software; frames are copied into the bootloader's framebuffer. Presented to iOS as an iPhone X panel (1125×2436) |
@@ -27,9 +27,9 @@ As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock 
 
 ## What does not work (yet)
 
-- **Navigation:** you cannot leave an app (the home gesture and AssistiveTouch Home do nothing yet).
 - **No Wi-Fi, Bluetooth, cellular, audio, camera, sensors, GPS or SEP / Face ID.** Daemons for them start and fail or keep relaunching.
-- **No GPU.** Everything is drawn by the CPU at roughly 20–30 fps. The two Cortex-A76 cores are not used yet.
+- **No GPU.** Everything is drawn by the CPU at roughly 20–30 fps.
+- **No working internet connection from iOS.** USB Ethernet enumerates and responds to ping from a host, but iOS `configd` does not configure the interface yet.
 - **Few apps.** The image has only what is on the system volume. There is no App Store, no Apple ID, and some Settings pages are empty.
 - **Slow boot:** about 4 minutes on the Apple logo.
 - **Security is off:** permissive code signing (AMFI) and sandbox policies, a stub AppleKeyStore, no data protection. Do not put anything personal on it.
@@ -49,7 +49,7 @@ There is no serial port (the debug UART is wired as SPI on this board). The kern
 
 ## How to do it yourself
 
-You need a Redmi Note 10 Pro (`sweet`, global or Indian variant, SM7150) with an **unlocked bootloader**, a Linux PC, and a GitHub account for the kernel build. This is the exact path used for the screenshots above; other variants or firmware may need changes. **Everything on `userdata` is lost.** Bootloaders, recovery, modem and persist partitions are never touched.
+You need a Redmi Note 10 Pro (`sweet`, global, or `sweetin`, Indian variant, SM7150) with an **unlocked bootloader**, a Linux PC, and a GitHub account for the kernel build. This is the exact path used for the screenshots above; other variants or firmware may need changes. **Everything on `userdata` is lost.** Bootloaders, recovery, modem and persist partitions are never touched. This experimental build lacks Wi-Fi, cellular, audio, camera, and several other daily-use features; it also disables much of iOS security. Do not use it as a daily phone or store personal data on it.
 
 ### 0. Back up the phone
 
@@ -100,23 +100,29 @@ ipsw img4 im4p extract research/ipsw-x/dt/Firmware/all_flash/DeviceTree.d22ap.im
 Needs `aarch64-linux-gnu-gcc` and `mkbootimg`.
 
 ```sh
-python3 tools/mkadt.py shim/out/sweet.adt --highmem
+python3 tools/mkadt.py shim/out/sweet.adt --fdt dtb/sweet-live.dtb --memory-report shim/out/memory.json
 python3 tools/mkpayload.py xnu/out/kernel.development.sweet shim/out/sweet.adt shim/out/payload.bin \
-    --cmdline 'debug=0xc serial=3 cpus=6 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_noconsole=1 sweetfb_hz=30'
+    --cmdline 'debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_noconsole=1 sweetfb_hz=30'
 shim/build.sh ../shim/out/payload.bin      # -> shim/out/shim-boot.img
 ```
+
+`--fdt` takes one raw live DTB, not a concatenation of stock DTBs. It reads the memory banks, FDT reservations and `/reserved-memory`, then selects the largest safe contiguous range above 4 GiB and reserves 1 MiB for the panic log. Unknown dynamic reservations cause an error. `memory.json` records detected banks, excluded ranges and the actual XNU range. Without a live tree, `--highmem` preserves the legacy reference-phone map; it assumes that phone's capacity.
+
+This does not make all installed RAM available: adding lower DDR with its Qualcomm holes still requires changes to XNU's physical-memory initialization. It also does not expand storage; the HFS+ volume size is the size passed to `mkiosroot.sh` (16 GiB in the example).
 
 What the less obvious boot-args do:
 
 | Boot-arg | Effect |
 | --- | --- |
 | `rd=ufsroot0 ufsrw=1 rootrw=1` | Root on the `userdata` partition, writable |
-| `cpus=6` | Start the six A55 cores; `cpus=1` is the safe fallback |
+| `cpus=8` | Start all six A55 and two A76 cores with patch 0078 or newer; `cpus=1` selects one core. Without an explicit command line, the payload builder selects all CPUs declared in the ADT (one for QEMU) |
 | `launchd_unsecure_cache=1` | launchd accepts its job cache without AMFI |
 | `wdt=-1 wdt_test=no_user_checkin` | No hardware watchdog |
 | `sweetfb_noconsole=1` | Stop drawing kernel text over the GUI. It still goes to the persistent log; panics are drawn |
-| `sweetfb_hz=30` | Panel refresh rate of the CPU copy |
+| `sweetfb_hz=30` | Target CPU framebuffer copy cadence. Does not change the panel's DSI mode; the current software notification timer is approximately 60 Hz |
 | `sweettouch=0`, `sweetkeys=0` | Disable the touch or button driver |
+
+Patch 0082 fixes copy pacing for rates that do not divide 60: a request for 45 copies/s previously became 60. Rates above 60 are capped with a diagnostic; zero retains the unthrottled software-tick behavior. These are nominal timer targets; CPU rendering/copying can be slower. The [sweet panel DTS](https://github.com/ArrowOS-Devices/android_kernel_xiaomi_sweet/blob/arrow-13.1/arch/arm64/boot/dts/qcom/xiaomi/sweet/dsi-panel-k6-38-0c-0a-fhd-dsc-video.dtsi) contains 60/120 Hz modes, but selecting a physical mode needs DSI/DSC clock and timing programming. The current port inherits ABL's scanout and has no Adreno acceleration or verified 120 Hz mode.
 
 ### 4. Flash the root and boot
 
@@ -125,6 +131,10 @@ fastboot -S 512M flash userdata ios16-root.simg   # ~7 minutes; do not unplug
 # Xiaomi's fastboot often hangs after a large flash: re-enter fastboot with Power + Volume down
 fastboot boot shim/out/shim-boot.img
 ```
+
+On Windows 10, install Google's Android Platform-Tools, copy `ios16-root.simg` and `shim/out/shim-boot.img` beside [`install-windows10.bat`](install-windows10.bat), and rename the boot image to `shim-boot.img`. Boot the phone to bootloader fastboot mode (Power + Volume Down), connect it by USB, then run the BAT file. It checks for exactly one connected `sweet`/`sweetin` device with an unlocked bootloader, asks you to confirm `ERASE userdata`, writes only `userdata`, then uses `fastboot boot` for a temporary shim boot. It does not build the kernel or root image; build those first using the steps above. Keep the phone connected until fastboot finishes.
+
+OrangeFox is useful for backing up the device-specific partitions in step 0 and recovering the phone. This installer uses bootloader fastboot to write the large root image; the image is not an OrangeFox ZIP.
 
 The first boot takes about 4–5 minutes on the Apple logo, then the lock screen appears. Swipe up to unlock. To get back to fastboot, hold Power + Volume down.
 
@@ -189,7 +199,7 @@ Not in git: partition backups, live device trees, recovery images, Apple firmwar
 
 ## Key hardware facts
 
-- RAM: payloads use the upper bank, `0x100000000` + `0xfcc00000` (about 3.95 GiB), above Qualcomm's protected carve-outs.
+- RAM: the reference phone's upper bank is `0x100000000` + `0xfcc00000` (about 3.95 GiB before the panic-log carveout). `mkadt.py --fdt` derives a safe contiguous upper range for the provided tree instead of assuming that capacity on every variant.
 - GICv3 with security extensions: the timer goes through Group 1 IRQ (virtual timer INTID 19), not FIQ as on Apple silicon.
 - PSCI through `smc`, 19.2 MHz timer, ARMv8.2 without pointer authentication. MPIDR uses Aff1 for the core number.
 - Panel: 1080×2400 DSC video mode, continuous splash from ABL, no refresh kick needed.

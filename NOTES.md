@@ -1,5 +1,24 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+### CURRENT SESSION 2026-10-21 — CPU, RAM and display work
+
+- Current user's handset is still running rooted Android/VantomKernel; they have not installed this iOS port. The older phone boots and image paths below describe the upstream author's historical setup, not a device connected to this workspace.
+- Requested outcome remains a usable iOS 16 system with built-in 2.4/5 GHz Wi-Fi, all available RAM/storage, all eight CPU cores, GPU acceleration and 120 Hz. That outcome is not implemented. No device writes or boots were performed in this session.
+- Implementation commit: `de53f46` (RAM layout selection, default CPU selection, payload bounds and patch 0082). Saved locally; not pushed because build/account access is unavailable.
+- Implemented `tools/fdt.py` and `mkadt.py --fdt LIVE_DTB --memory-report JSON`: read actual root memory tuples, FDT memreserve and static/dynamic reserved-memory allocations, then select the largest safe contiguous upper range with 32 MiB base / 16 KiB end alignment. Unknown dynamic allocation bounds fail explicitly. Legacy `--highmem` remains available. Lower DDR across holes is still unsupported; this is not all-RAM support.
+- `mkpayload.py` now selects all CPUs declared in the ADT by default (eight on sweet, one on QEMU); explicit command lines retain their supplied CPU choice. Payload validation covers destination spans, overlapping segments, entry inside loaded kernel bytes, truncated file data, ramdisk, ADT and boot_args placement, and command-line overflow. README's reference command now says `cpus=8`.
+- Added kernel patch 0082: replace integer framebuffer copy divisors with a fractional cadence accumulator, preserving the requested average from 1–60 copies per nominal second. Previously `sweetfb_hz=45` became 60. A request above 60 logs the software-timer limit; this does not set panel timing or add GPU support. The actual header is compiled and exercised as both C and C++ in host tests, and the framebuffer patch chain applies with fuzz disabled.
+- Validation: 28 host tests pass (DTB layouts for 6/8 GiB variants, reservations/holes/dynamic pools, metadata overflow, Mach-O/ramdisk packing, CPU selection, kernel entry validation, actual pacing helper). Repository checks cover 82 contiguous patches, Python syntax and shell syntax. Full XNU compile/boot remains unverified.
+- Build access checked again: `gh api .../actions/workflows/xnu.yml` returns HTTP 401 Bad credentials. Public run 39158169212 still lists nonexpired buildtree/kernel artifacts, but public artifact-proxy download fails at the environment gateway. Cloud runtime reports no configured credentials or outbound identities. No alternate token or credential was used.
+- Source references checked: xnu-8796.141.3 `arm_vm_init.c` uses `physBase/memSize` for the current contiguous physical range; sweet panel DTS advertises 60/120 Hz using DSI dynamic-FPS timing; Mesa Freedreno/Turnip documents Vulkan/Adreno support, not a drop-in iOS Metal driver. GPU/Metal integration, native DSI/DSC mode setting, lower-DDR support, CPU power/thermal management and Wi-Fi remain unfinished. No `120` constant or registry class was added to pretend those work.
+
+### UPDATE 2026-10-21
+
+- Repository was checked at `425b251` (main); the newest kernel source change is commit `fdad0de` (patch 0081, ue0 link state). The workspace has no phone connection, root image, kernel build artifact, or Windows host, so no device boot or installation was performed.
+- Added `install-windows10.bat`: expects a prebuilt `ios16-root.simg` and `shim-boot.img` beside the script, checks one fastboot device, `sweet`/`sweetin` product, and unlocked state, requires the exact phrase `ERASE userdata`, writes only userdata, then boots the shim temporarily. README now documents Windows use and makes the experimental/daily-use limitations explicit.
+- The BAT script has not been exercised on Windows or against a phone; treat it as unverified until tested. It cannot build the XNU kernel or create the Apple iOS root image. OrangeFox is still recommended for backing up the calibration/modem partitions; the large root image is written from bootloader fastboot.
+- **Next kernel blocker remains USB internet:** the 0080 route/address tracing image was not booted on v15 per the prior handoff; latest note at the top of the 2026-10-18 section documents the expected investigation. Continue only when the device and existing v15 image are available; preserve the installed root and use temporary `fastboot boot` images.
+
 ## Agent handoff / active work (2026-10-15, latest)
 
 ### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<
@@ -431,3 +450,89 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
      cpu_init, before arm_vm_init.
   5. panic hook at top of panic_trap_to_debugger: va_copy + _doprnt(fmt, &copy, sweet_early_putc, 16).
   Verify with tools/xnu-cc.py (compile+symbols) and patch-order simulation before the single CI run.
+
+### UPDATE 2026-10-21 (KernelSU and network integration review)
+
+- User confirmed KernelSU is installed (`su -c id` reports uid 0, context `u:r:ksu:s0`) on stock MIUI Android 13, device `sweet`, fingerprint `Redmi/sweet_global/sweet:13/TKQ1.221013.002/V14.0.9.0.TKFMIXM:user/release-keys`, running `4.14.356-openela-rc1-VantomKernel`.
+- This grants read access for a live device-tree dump, but it does not provide a booted iOS kernel or build artifacts. No partition writes or installation were performed.
+- Reviewed the proposed shortcut for the `configd` network discovery blocker against upstream IONetworkingFamily 85.2. A fabricated class with the `IONetworkInterface` metaclass and only registry properties would be a stub; upstream `IONetworkInterface::init()` also rejects controllers/interfaces that already own an ifnet. Removed the uncommitted draft instead of treating it as a fix. A correct bridge must integrate the actual DWC3/ECM packet path with IONetworkingFamily's controller/interface and ifnet ownership model, then be compiled and boot-tested.
+- Next useful device input: read-only live FDT dump from Termux (`su -c 'cat /sys/firmware/fdt' > ~/storage/shared/Download/sweet-live.dtb`) and attach `sweet-live.dtb`. The user need not install the port to collect this.
+
+### UPDATE 2026-10-21 (Wi-Fi is the requested network target)
+
+- User clarified that the required network feature is the phone's built-in Wi-Fi, including 5 GHz; USB Ethernet is not the requested end state.
+- Repository search found no Qualcomm Wi-Fi/802.11 driver or firmware integration in the kernel patches. The current kernel's real USB ECM implementation is separate and does not satisfy Wi-Fi.
+- Exact WLAN chipset, Android driver/module, firmware filenames, and advertised bands have not yet been established from this device. Need a read-only Android inventory (driver symlink, WLAN-related dmesg, firmware/module names, `iw phy` bands if available) and live FDT before choosing an implementation path. Do not assume the Qualcomm chip can bind to Apple's iOS Wi-Fi stack; it will need a compatible kernel driver and iOS-facing Wi-Fi control/data integration.
+
+### UPDATE 2026-10-21 (WLAN hardware identified)
+
+- Rooted read-only inventory from the user's stock Android 13 device confirms `wlan0` and `wlan1` under platform path `soc/18800000.qcom,icnss`, with platform device `62e40000.slim:wcn3990` and `soc:bt_wcn3990`; the platform driver list contains `icnss`. Android reports SoC `SM7150` / Snapdragon 732G and ships `/vendor/etc/wifi/WCNSS_qcom_cfg.ini`.
+- This identifies Qualcomm WCN3990. The chipset supports dual-band 802.11ac (2.4/5 GHz); actual channels depend on firmware/regulatory configuration. The existing iOS port still has no WLAN driver. Android's ICNSS/QCA driver is Linux-specific and cannot be loaded into XNU; a real port needs a WCN3990 transport/firmware driver plus integration into iOS's Wi-Fi control and network services.
+- Still needed to map the Android implementation: `/proc/modules`, interface driver symlink, firmware locations and driver version. The prior grep of dmesg was noisy because the filter included generic `wifi`; query exact WCN/ICNSS/QCA terms next.
+
+### UPDATE 2026-10-21 (WCN3990 Android driver inventory)
+
+- Follow-up root output: `/sys/class/net/wlan0/device/driver` resolves to `/sys/bus/platform/drivers/icnss`; platform devices include `18800000.qcom,icnss`, `62e40000.slim:wcn3990`, and `soc:bt_wcn3990`. Interfaces include `wlan0`, `wlan1`, and `p2p0`.
+- `/proc/modules` returned no WLAN/QCA/CNSS entries, so no matching driver module is listed (the active driver may be built into the Android kernel). Vendor image has `wlanmdsp.mbn`, many board-data files (`bdwlan.*`, including `bdwlan.bin`) and `WCNSS_qcom_cfg.ini`; do not copy board data/calibration artifacts into git.
+- Filtered kernel log only had repeated `cnss-daemon: Invalid mac address` / `failed to update gateway`, likely unrelated daemon warnings; it did not show firmware boot/transport details. Need the device-tree resources for ICNSS/WCN3990 before drafting a hardware driver. No XNU Wi-Fi implementation has been added yet.
+
+### UPDATE 2026-10-21 (ICNSS/WCN device-tree nodes)
+
+- Live tree confirms `/soc/qcom,icnss@18800000` (`compatible = qcom,icnss`) is the network platform provider and exposes `reg`/interrupt properties; `/soc/slim@62e40000/wcn3990` has `compatible = qcom,btfmslim_slave`, which is the Bluetooth Slimbus function, not a complete Wi-Fi device description. `wlan0` remains attached to the ICNSS platform device.
+- Public XNU sources in this checkout do not include Apple's IO80211 driver family, and Apple OSS repositories expose no IO80211Family source. The iOS-facing Wi-Fi driver/control interface is therefore not available to implement against from the current source tree. This, plus Qualcomm's Linux-specific ICNSS/WLAN stack, makes a real WCN3990 port substantially larger than adding platform resources or exposing an ifnet. No code should claim Wi-Fi or 5 GHz works until the driver, firmware boot, scan, association, DHCP, and data path are implemented and verified.
+
+### UPDATE 2026-10-21 (Wi-Fi source/build feasibility)
+
+- Confirmed in the live device tree: ICNSS node is `/soc/qcom,icnss@18800000` (`qcom,icnss`); WCN3990 Slimbus child is `/soc/slim@62e40000/wcn3990` (`qcom,btfmslim_slave`, Bluetooth function). The WLAN interface remains attached to ICNSS.
+- Reviewed an Android 13 Redmi Note 10 Pro kernel source branch's `drivers/staging/qcacld-3.0`: it is Qualcomm's CNSS WLAN host driver built as Linux Kbuild module `wlan`; it cannot be inserted into XNU. The device's active ICNSS driver and network interfaces with no `/proc/modules` match suggest its WLAN driver is built into that Android kernel, but this is not confirmed from this exact VantomKernel build.
+- This workspace has no local `clang`/`xcrun` or generated XNU build tree. `gh auth status` reports the injected `GH_TOKEN` invalid; GitHub Actions listing/dispatch returns HTTP 401. Kernel build/CI validation is currently blocked.
+- Therefore no functional Wi-Fi code has been added. The first implementation milestone requires porting/implementing ICNSS power/firmware transport and the WCN3990 host protocol, followed by an iOS-compatible Wi-Fi driver/control path. The iOS 16 IO80211 implementation is not in the public XNU sources checked here. A registry-only pretend interface would not deliver scan/association/data and must not be labeled Wi-Fi support.
+
+### UPDATE 2026-10-21 (external WCN3990 Wi-Fi research)
+
+- Found a detailed public mainline Linux bring-up for Xiaomi Redmi Note 8 (SM6125) with the same Qualcomm WCN3990 family. It reports a verified 5 GHz VHT80 association (channel 36 / 5180 MHz, 292.5 Mbit/s) using Linux `ath10k_snoc` and device firmware `WLAN.HL.3.0.2-00656`: <https://github.com/Huabin1010/ginkgo-mainline-linux/blob/main/docs/ginkgo-wifi-complete-2026-08-18.md>.
+- Key documented prerequisites: MPSS/remoteproc and QRTR/WLFW, 1 MiB MSA with correct hypervisor assignment, matching device board data, and exact QMI CAL download/report semantics. The same-radio reference is useful but its SM6125 device tree/calibration cannot be copied to the user's SM7150 Redmi Note 10 Pro.
+- Added `docs/WIFI_RESEARCH.md` with sources, hardware facts, transfer limits, and current XNU/build blockers. No Wi-Fi code or device firmware is included.
+- The external reference's accepted 5 GHz result is a useful radio-level target, while its `bdf_c3j.bin`, `board.bin`, MSA address, and reserved-memory map are device-specific and must not be copied into sweet.
+- Additional community research: OpenIntelWireless `itlwm` (GPLv2 macOS driver) shows a macOS `IO80211Controller` integration surface (`IO80211Interface`, Apple 802.11 requests, DMA/queue and regulatory methods). This is only an interface clue; its code is not being copied, and macOS headers do not establish the iOS 16 ABI.
+
+### UPDATE 2026-10-21 (live Android Wi-Fi band capability)
+
+- User's `dumpsys wifi` on this exact sweet handset reports 2.4 GHz channels 1–13 and 5 GHz channels 36/40/44/48/52/56/60/64. 6 GHz and 60 GHz lists are empty; driver country code is `AZ`. This confirms Android advertises 5 GHz for this device. It does not prove iOS support or the embedded firmware release string.
+- Added this live-device evidence to `docs/WIFI_RESEARCH.md`.
+
+### UPDATE 2026-10-21 (sweet ICNSS resource map)
+
+- Reviewed the ArrowOS Redmi Note 10 Pro public device tree. `atoll.dtsi` describes ICNSS MMIO `0x18800000` / `0x800000`, SMMU IOVA windows, twelve Copy Engine IRQs, five regulator supplies and the WLAN fixed MSA region. The Xiaomi common DTS overlay reserves WLAN MSA at `0x97d00000` with size `0x180000` (1.5 MiB), distinct from the 1 MiB SM6125/ginkgo example.
+- The user's live FDT dump already confirms the ICNSS compatible and first MMIO range; the remaining mappings and supply/MSA properties have only been checked against the public sweet tree, not yet all against the live FDT.
+- Added the source links and explicit verification boundary to `docs/WIFI_RESEARCH.md`. This gives a concrete hardware resource inventory for a future XNU ICNSS implementation; it is not a driver, and no Wi-Fi code has been built or tested.
+
+### UPDATE 2026-10-21 (active ICNSS FDT details)
+
+- User provided read-only active FDT properties. `reg` is three ranges: `0x18800000/0x800000`, `0xa0000000/0x10000000`, and `0xb0000000/0x10000`. `interrupts` contains entries numbered 414–425. `iommus` raw cells are `0x30, 0x240, 1`.
+- `qcom,wlan-msa-fixed-region` resolves to reserved-memory node `/reserved-memory/wlan_msa_region@97500000`, whose `reg` is `0x97d00000/0x180000`; node unit-address and actual `reg` differ. Live ICNSS properties include four queried supply handles (`vdd-cx-mx`, `vdd-1.8-xo`, `vdd-1.3-rfa`, `vdd-3.3-ch0`), while `vdd-3.3-ch1-supply` and `qcom,hyp_disabled` were absent.
+- These active values differ from the reviewed public DTS: IOMMU tuple cell `0x240` vs `0xC0`, raw IRQ flag cell zero vs public level-high, and no live `vdd-3.3-ch1-supply`. The public DTS is not authoritative for sweet's current firmware/device-tree build. Need resolve the active interrupt parent and IOMMU phandle before interpreting those raw cells.
+- Updated `docs/WIFI_RESEARCH.md` with the live values and mismatches. This is still a hardware map only; no Wi-Fi implementation or boot test exists.
+
+### UPDATE 2026-10-21 (ICNSS provider phandles)
+
+- User resolved active IOMMU phandle `0x30` to `/soc/apps-smmu@0x15000000`, confirming the ICNSS IOMMU tuple refers to Apps SMMU. Root `interrupt-parent` is phandle `0x1`.
+- Updated the Wi-Fi research note with the IOMMU resolution. Need identify interrupt provider phandle `0x1` and its `#interrupt-cells` to fully parse the live interrupt tuples.
+
+### UPDATE 2026-10-21 (active WLAN interrupt controller)
+
+- User resolved interrupt-parent phandle `0x1` to `/soc/interrupt-controller@b220000`, `compatible = qcom,pdc-sdmmagpie`, with `#interrupt-cells = 3`. The ICNSS interrupt tuples are thus grouped in threes; the raw middle cells are 414–425 and the first/third cells are zero.
+- Reviewed the public Atoll DTS root: it also defaults interrupts through PDC, but uses `qcom,pdc-atoll` and lists level-high flags on the ICNSS entries. Do not misstate this as a direct-GIC difference; the live PDC provider has a device-specific compatible and different flag values.
+- Updated `docs/WIFI_RESEARCH.md`. Still need provider cell details to fully decode the Apps SMMU tuple and PDC parent relation.
+
+### UPDATE 2026-10-21 (active SMMU and PDC provider details)
+
+- User reports Apps SMMU node compatible `qcom,qsmmu-v500` and `#iommu-cells = 2`; ICNSS cells are phandle `0x30`, `0x240`, `1`.
+- Active PDC node's own interrupt parent is phandle `0x1a`. The WLAN MSA phandle is `0xb7` (already resolved to `/reserved-memory/wlan_msa_region@97500000`, `reg = 0x97d00000/0x180000`).
+- The user asked for one consolidated collection command rather than iterative single-purpose commands. Next device request should bundle all remaining read-only phone facts; don't continue serially requesting each phandle separately.
+
+### UPDATE 2026-10-21 (consolidated sweet Wi-Fi inventory and ICNSS sequence)
+
+- User ran one consolidated read-only inventory. It confirms the ICNSS phandle `0x308`, three register ranges, twelve CE interrupt cells, Apps SMMU `qcom,qsmmu-v500` (`#iommu-cells = 2`), PDC `qcom,pdc-sdmmagpie` (`#interrupt-cells = 3`), PDC parent GICv3 at `0x17a00000` (`#interrupt-cells = 3`), and WLAN MSA phandle `0xb7` at `0x97d00000/0x180000`. No WLAN/QCA module is listed; `wlan0` is bound to `icnss`. Firmware filenames are present; exact firmware version is still unknown. No device write was done.
+- Reviewed ArrowOS sweet `drivers/soc/qcom/icnss.c` and `icnss_qmi.c`. The reference driver maps ICNSS MMIO, CE interrupts, fixed MSA and SMMU windows; absent `qcom,hyp_disabled` means it uses `hyp_assign_phys()` for VMID memory assignments. All five listed voltage rails are optional in this source. WLFW control uses QRTR/QMI capability/version, MSA info/ready and firmware-ready exchanges. This is a Linux-only implementation reference, not XNU-compatible source.
+- Updated `docs/WIFI_RESEARCH.md` with the complete live-provider resolution and Linux bring-up sequence. No further device-specific command is currently needed; next progress is source/ABI work in the repository, not more serial Termux queries.

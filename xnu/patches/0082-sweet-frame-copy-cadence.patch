@@ -1,0 +1,89 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -35,6 +35,7 @@
+  * the first swap on (it still reaches the persistent log; panics draw).
+  */
+ #include "SweetSurface.h"
++#include "SweetFramePacing.h"
+ 
+ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
+ 
+@@ -113,7 +114,8 @@
+ 	bool          fConsolePaused;
+ 	uint8_t       fPending[SWEET_FB_SWAP_REC_SIZE];     /* latest swap, not yet shown */
+ 	bool          fDirty;
+-	uint32_t      fFlushTicks;    /* vsync ticks between panel copies */
++	uint32_t      fFlushHz;       /* copies per nominal second, capped by software tick */
++	uint32_t      fFlushPhase;    /* fractional copy cadence accumulator */
+ 	bool          fPowerOff;      /* RequestPowerChange(0) */
+ 	uint32_t      fFadeStep;      /* fade-out steps done while off */
+ 
+@@ -194,7 +196,14 @@
+ 	}
+ 	uint32_t hz = 10;
+ 	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
+-	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
++	fFlushHz = sweet_fb_copy_rate(hz);
++	fFlushPhase = 0;
++	if (hz > SWEET_FB_TIMER_HZ) {
++		IOLog("SWEET FB: requested copy rate %u exceeds software tick %u; panel mode unchanged\n",
++		    hz, SWEET_FB_TIMER_HZ);
++	}
++	IOLog("SWEET FB: copy target=%u Hz, software tick=%u Hz (not panel timing)\n",
++	    fFlushHz, SWEET_FB_TIMER_HZ);
+ 	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
+ 
+ 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
+@@ -242,7 +251,8 @@
+ 		sender->setTimeoutUS(SWEET_FB_VSYNC_US);
+ 		return;
+ 	}
+-	bool flush = fb->fDirty && (count % fb->fFlushTicks) == 0;
++	bool due = sweet_fb_copy_due(fb->fFlushHz, &fb->fFlushPhase);
++	bool flush = fb->fDirty && due;
+ 	uint8_t *rec = NULL;
+ 	if (flush) {
+ 		rec = (uint8_t *)IOMallocData(SWEET_FB_SWAP_REC_SIZE);
+@@ -293,8 +303,9 @@
+ /*
+  * A swap only records the frame: copying 10 MB into the panel on every
+  * swap (backboardd presents at 60 Hz) took the whole CPU. The vsync timer
+- * shows the latest frame every fFlushTicks ticks (boot-arg sweetfb_hz,
+- * default 10 Hz).
++ * shows the latest frame at the requested average copy cadence (boot-arg
++ * sweetfb_hz, default 10 Hz, capped at the nominal 60 Hz software tick).
++ * This does not reprogram the panel's DSI mode or enable GPU rendering.
+  */
+ void
+ AppleCLCD::swap(const uint8_t *rec)
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetFramePacing.h
+@@ -0,0 +1,28 @@
++#pragma once
++#include <stdint.h>
++#include <stdbool.h>
++
++/* Nominal software notification frequency, not the panel's DSI mode. */
++#define SWEET_FB_TIMER_HZ 60U
++
++static inline uint32_t
++sweet_fb_copy_rate(uint32_t requested)
++{
++	return requested == 0 || requested > SWEET_FB_TIMER_HZ ?
++	       SWEET_FB_TIMER_HZ : requested;
++}
++
++/* Advance once per software tick, even if no new surface is pending.
++ * phase is initialized to zero and stays below SWEET_FB_TIMER_HZ.
++ * Fractional divisors (e.g. 45/60) keep their requested average cadence.
++ */
++static inline bool
++sweet_fb_copy_due(uint32_t requested, uint32_t *phase)
++{
++	*phase += sweet_fb_copy_rate(requested);
++	if (*phase < SWEET_FB_TIMER_HZ) {
++		return false;
++	}
++	*phase -= SWEET_FB_TIMER_HZ;
++	return true;
++}

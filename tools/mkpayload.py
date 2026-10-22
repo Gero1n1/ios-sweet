@@ -140,9 +140,71 @@ def adt_dram(adt_blob):
             struct.unpack('<Q', chosen.prop('dram-size'))[0])
 
 
-def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
-    buf = bytearray(open(kernel_path, 'rb').read())
+def check_memory_layout(pieces, virt_base, entry, kernel_end, phys_base, mem_size, adt_size):
+    """Validate everything the shim writes, including its ADT and boot_args.
+
+    Sizes and addresses are Python integers here: reject overflow before any
+    value is encoded in the uint64_t payload header used on the phone.
+    """
+    if (phys_base < 0 or phys_base % 0x2000000 or mem_size <= 0 or
+            mem_size % PAGE or phys_base + mem_size >= 1 << 64):
+        raise ValueError('invalid ADT RAM range or alignment')
+    if not pieces or virt_base < 0 or virt_base % 0x2000000:
+        raise ValueError('invalid kernel virtual base or empty segment list')
+    previous_end, entry_loaded = 0, False
+    for vmaddr, vmsize, data in sorted(pieces, key=lambda piece: piece[0]):
+        if (vmaddr < virt_base or vmaddr % 8 or vmsize <= 0 or vmsize % 8 or
+                vmaddr + vmsize >= 1 << 64 or len(data) > vmsize):
+            raise ValueError('invalid kernel/ramdisk segment size or address')
+        if vmaddr < previous_end:
+            raise ValueError('overlapping kernel/ramdisk segments')
+        previous_end = vmaddr + vmsize
+        if previous_end - virt_base > mem_size:
+            raise ValueError('kernel/ramdisk segment exceeds the selected RAM range')
+        entry_loaded |= entry is not None and vmaddr <= entry < vmaddr + len(data)
+    if not entry_loaded:
+        raise ValueError('kernel entry point is outside file-backed segments')
+    if (kernel_end < previous_end or kernel_end % PAGE or adt_size <= 0 or
+            adt_size > 0xffffffff):
+        raise ValueError('invalid ADT placement or kernel end')
+    adt_pa = phys_base + kernel_end - virt_base
+    boot_args_pa = (adt_pa + adt_size + PAGE - 1) & ~(PAGE - 1)
+    top = boot_args_pa + PAGE
+    if top > phys_base + mem_size:
+        raise ValueError('kernel, ramdisk, ADT and boot_args do not fit in the selected RAM range')
+    return dict(phys_base=hex(phys_base), mem_size=hex(mem_size),
+                adt_phys=hex(adt_pa), boot_args_phys=hex(boot_args_pa),
+                top_of_kernel_data=hex(top))
+
+
+def default_cmdline(adt_blob):
+    """Use all CPUs declared by this ADT (eight on sweet, one on QEMU)."""
+    root, _ = adt.parse(adt_blob)
+    cpus = next((node for node in root.children if node.name == 'cpus'), None)
+    count = sum(node.prop('device_type') == b'cpu\0' for node in cpus.children) if cpus else 0
+    if not 1 <= count <= 8:
+        raise ValueError('ADT must declare between one and eight CPUs for the default boot command line')
+    return f'debug=0xc serial=3 cpus={count} keepsyms=1'
+
+
+def build(kernel_path, adt_path, cmdline=None, ramdisk_path=None):
+    with open(adt_path, 'rb') as source:
+        adt_blob = source.read()
+    if cmdline is None:
+        cmdline = default_cmdline(adt_blob)
+    cl = cmdline.encode()
+    if b'\0' in cl or len(cl) >= BOOT_LINE_LENGTH:
+        raise ValueError(f'boot command line must be NUL-free and at most {BOOT_LINE_LENGTH - 1} bytes')
+    with open(kernel_path, 'rb') as source:
+        buf = bytearray(source.read())
     m = parse_macho(buf)
+    for seg in m['segs']:
+        if (seg['filesize'] > seg['vmsize'] or
+                seg['fileoff'] + seg['filesize'] > len(buf)):
+            raise ValueError(f"{seg['name']}: segment data exceeds its memory size or the Mach-O file")
+    if m['entry'] is None or not any(
+            seg['vmaddr'] <= m['entry'] < seg['vmaddr'] + seg['filesize'] for seg in m['segs']):
+        raise ValueError('kernel entry point is outside file-backed kernel segments')
     nfix = apply_chained_fixups(buf, m)
     segs = [s for s in m['segs'] if s['vmsize']]
     text = m['segs'][0]
@@ -153,13 +215,15 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
     kernel_end = max(s['vmaddr'] + s['vmsize'] for s in segs)
     kernel_end = (kernel_end + PAGE - 1) & ~(PAGE - 1)
 
-    adt_blob = open(adt_path, 'rb').read()
     # The ADT decides where the kernel's RAM is (mkadt.py --highmem).
     PHYS_BASE, MEM_SIZE = adt_dram(adt_blob)
     pieces = [(s['vmaddr'], s['vmsize'], buf[s['fileoff']:s['fileoff'] + s['filesize']]) for s in segs]
     ramdisk = None
     if ramdisk_path:
-        image = open(ramdisk_path, 'rb').read()
+        with open(ramdisk_path, 'rb') as source:
+            image = source.read()
+        if not image:
+            raise ValueError('root ramdisk is empty')
         rd_size = (len(image) + PAGE - 1) & ~(PAGE - 1)
         rd_va = kernel_end
         kernel_end = rd_va + rd_size
@@ -168,6 +232,8 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
         adt_blob = add_ramdisk_to_adt(adt_blob, rd_pa, rd_size)
         ramdisk = (hex(rd_pa), hex(rd_size))
 
+    layout = check_memory_layout(pieces, virt_base, m['entry'], kernel_end,
+                                 PHYS_BASE, MEM_SIZE, len(adt_blob))
     hdr_size = SEG_TABLE + 32 * len(pieces)
     out = bytearray(hdr_size)
     seg_table = []
@@ -183,24 +249,28 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
     struct.pack_into('<8sII', out, 0, b'SWEETXNU', 1, len(pieces))
     struct.pack_into('<7Q', out, 0x10, virt_base, m['entry'], adt_off, len(adt_blob), kernel_end,
                      PHYS_BASE, MEM_SIZE)
-    cl = cmdline.encode()[:BOOT_LINE_LENGTH - 1]
     out[CMDLINE:CMDLINE + len(cl)] = cl
     for i, t in enumerate(seg_table):
         struct.pack_into('<4Q', out, SEG_TABLE + 32 * i, *t)
     info = dict(cputype=hex(m['cputype']), cpusub=m['cpusub'], fixups=nfix, virt_base=hex(virt_base),
-                entry=hex(m['entry']), kernel_end=hex(kernel_end), ramdisk=ramdisk, size=len(out),
+                entry=hex(m['entry']), kernel_end=hex(kernel_end), ramdisk=ramdisk, size=len(out), cmdline=cmdline,
                 segs=[(s['name'], hex(s['vmaddr']), hex(s['vmsize'])) for s in segs])
+    info.update(layout)
     return bytes(out), info
 
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('kernel'); ap.add_argument('adt'); ap.add_argument('out')
-    ap.add_argument('--cmdline', default='debug=0xc serial=3 cpus=1 keepsyms=1')
+    ap.add_argument('--cmdline', help='boot arguments (default enables all CPUs declared in the ADT)')
     ap.add_argument('--ramdisk', help='root image for md0 (boot with rd=md0)')
     a = ap.parse_args()
-    blob, info = build(a.kernel, a.adt, a.cmdline, a.ramdisk)
-    open(a.out, 'wb').write(blob)
+    try:
+        blob, info = build(a.kernel, a.adt, a.cmdline, a.ramdisk)
+    except (OSError, ValueError, struct.error) as error:
+        ap.error(str(error))
+    with open(a.out, 'wb') as output:
+        output.write(blob)
     for k, v in info.items():
         if k != 'segs':
             print(f'{k}: {v}')
