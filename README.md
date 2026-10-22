@@ -8,6 +8,12 @@ As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock 
 
 > Experimental bring-up, not a usable phone OS. Many things are missing or stubbed (see below), and Apple's security model is mostly switched off. It installs into the `userdata` partition and so **erases Android's user data**.
 
+The boot and hardware results below are the upstream author's historical results.
+For the current owner's handset, still running Android, the 2026-10-22 checks
+confirm a successful full XNU build, 52 local host tests and safe upper-RAM
+selection from its live device tree. This kernel has not been booted on that
+handset. Built-in Wi-Fi, GPU acceleration and physical 120 Hz remain unimplemented.
+
 ## What works
 
 | Area | State |
@@ -132,7 +138,11 @@ fastboot -S 512M flash userdata ios16-root.simg   # ~7 minutes; do not unplug
 fastboot boot shim/out/shim-boot.img
 ```
 
-On Windows 10, install Google's Android Platform-Tools, copy `ios16-root.simg` and `shim/out/shim-boot.img` beside [`install-windows10.bat`](install-windows10.bat), and rename the boot image to `shim-boot.img`. Boot the phone to bootloader fastboot mode (Power + Volume Down), connect it by USB, then run the BAT file. It checks for exactly one connected `sweet`/`sweetin` device with an unlocked bootloader, asks you to confirm `ERASE userdata`, writes only `userdata`, then uses `fastboot boot` for a temporary shim boot. It does not build the kernel or root image; build those first using the steps above. Keep the phone connected until fastboot finishes.
+On Windows 10, install Google's Android Platform-Tools, copy `ios16-root.simg` and `shim/out/shim-boot.img` beside [`install-windows10.bat`](install-windows10.bat), and rename the boot image to `shim-boot.img`. Boot the phone to bootloader fastboot mode (Power + Volume Down), connect it by USB, then run the BAT file. It checks for exactly one connected `sweet`/`sweetin` device with an unlocked bootloader and `is-userspace: no` (bootloader fastboot, not fastbootd). It pins that serial for every device command, asks for the exact case-sensitive confirmation `ERASE userdata`, rechecks model/unlock/mode, writes only `userdata`, then uses `fastboot boot` for a temporary shim boot. Diagnostic logs stay in the printed temporary directory. It does not build the kernel or root image; build those first using the steps above. Keep the phone connected until fastboot finishes.
+
+The installer's control flow passes 15 tests on Windows 10 Pro against an inert
+fastboot executable that records arguments without opening a USB device. This
+checks guards and error handling, not flashing, image validity or a real boot.
 
 OrangeFox is useful for backing up the device-specific partitions in step 0 and recovering the phone. This installer uses bootloader fastboot to write the large root image; the image is not an OrangeFox ZIP.
 
