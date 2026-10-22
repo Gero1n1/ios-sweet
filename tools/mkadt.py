@@ -2,12 +2,14 @@
 """Build the minimal Apple Device Tree that the SWEET xnu needs to boot.
 
 Only what the early boot path actually reads (see NOTES.md); every MMIO
-address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem]
+address comes from the sweet live FDT. Usage: mkadt.py OUT.adt
+[--dump] [--qemu | --highmem | --fdt LIVE_DTB] [--memory-report JSON]
 """
-import hashlib, os, struct, sys
+import argparse, hashlib, json, os, struct, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adt  # noqa: E402
+import fdt  # noqa: E402
 
 # Kernel-managed RAM: above every Qualcomm XPU carve-out (see NOTES.md)
 PHYS_BASE = 0xb0000000
@@ -56,7 +58,8 @@ def d22ap_product(path=D22AP_ADT):
     if not os.path.exists(path):
         print(f'warning: {path} missing, no /product node', file=sys.stderr)
         return None
-    root, _ = adt.parse(open(path, 'rb').read())
+    with open(path, 'rb') as source:
+        root, _ = adt.parse(source.read())
     for c in root.children:
         if dict((k, v) for k, f, v in c.props).get('name') == b'product\0':
             return [(k, v) for k, f, v in c.props if not f and k not in ('name', 'AAPL,phandle')]
@@ -74,9 +77,15 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False):
+def build(seed=None, qemu=False, highmem=False, memory_region=None):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
-    phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
+    if qemu and (highmem or memory_region is not None):
+        raise ValueError('phone upper RAM cannot be combined with --qemu')
+    phys_base, mem_size = memory_region if memory_region is not None else (
+        (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE))
+    if (phys_base < 0 or phys_base % fdt.BLOCK or mem_size <= PANIC_LOG_SIZE or
+            mem_size % fdt.PAGE or phys_base + mem_size >= fdt.U64_END):
+        raise ValueError('invalid contiguous RAM range or alignment')
     # Carve the panic log off the top so the kernel never allocates over it.
     panic_base = phys_base + mem_size - PANIC_LOG_SIZE
     mem_size -= PANIC_LOG_SIZE
@@ -242,9 +251,44 @@ def build(seed=None, qemu=False, highmem=False):
 
 
 if __name__ == '__main__':
-    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('out')
+    ap.add_argument('--dump', action='store_true')
+    ap.add_argument('--qemu', action='store_true')
+    ap.add_argument('--highmem', action='store_true', help='legacy fixed upper RAM map (6 GB reference phone)')
+    ap.add_argument('--fdt', metavar='LIVE_DTB', help='select safe contiguous upper RAM from one device DTB')
+    ap.add_argument('--memory-report', metavar='JSON', help='save detected banks, exclusions and selected range (requires --fdt)')
+    args = ap.parse_args()
+    if args.qemu and (args.fdt or args.highmem):
+        ap.error('--qemu cannot use the phone upper RAM map')
+    if args.memory_report and not args.fdt:
+        ap.error('--memory-report requires --fdt')
+    paths = [os.path.realpath(path) for path in (args.out, args.fdt, args.memory_report) if path]
+    if len(paths) != len(set(paths)):
+        ap.error('ADT output, FDT input and memory report must use different paths')
+    plan, memory_region = None, None
+    try:
+        if args.fdt:
+            with open(args.fdt, 'rb') as source:
+                plan = fdt.upper_memory_plan(source.read())
+            base, end = plan['selected']
+            memory_region = (base, end - base)
+        root = build(qemu=args.qemu, highmem=args.highmem, memory_region=memory_region)
+    except (OSError, ValueError) as error:
+        ap.error(str(error))
     blob = adt.serialize(root)
-    open(sys.argv[1], 'wb').write(blob)
-    if '--dump' in sys.argv:
+    with open(args.out, 'wb') as output:
+        output.write(blob)
+    if plan is not None:
+        plan['xnu_ram'] = [base, end - PANIC_LOG_SIZE]
+        plan['panic_log'] = [end - PANIC_LOG_SIZE, end]
+        plan['managed_bytes'] = end - base - PANIC_LOG_SIZE
+        print(f"FDT RAM: detected={plan['detected_bytes']:#x}, XNU={base:#x}..{end - PANIC_LOG_SIZE:#x}; "
+              f"one contiguous span, panic log={PANIC_LOG_SIZE:#x}", file=sys.stderr)
+        if args.memory_report:
+            with open(args.memory_report, 'w') as report:
+                json.dump(plan, report, indent=2)
+                report.write('\n')
+    if args.dump:
         adt.dump(adt.parse(blob)[0])
-    print(f'{sys.argv[1]}: {len(blob)} bytes', file=sys.stderr)
+    print(f'{args.out}: {len(blob)} bytes', file=sys.stderr)

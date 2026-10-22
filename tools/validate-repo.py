@@ -12,7 +12,7 @@ Checks:
   3. Shell script syntax:
      - All tools/*.sh, shim/*.sh, and xnu/patches/*.sh pass bash -n check.
 """
-import argparse, glob, os, py_compile, re, subprocess, sys
+import argparse, glob, os, py_compile, re, shutil, subprocess, sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -71,7 +71,7 @@ def validate_patches(verbose=False):
             print(f"    - {err}")
         return False
 
-    print(green(f"[✓] Validated {len(patch_files)} patches (0001-{len(patch_files):04d} contiguous, format OK)"))
+    print(green(f"[OK] Validated {len(patch_files)} patches (0001-{len(patch_files):04d} contiguous, format OK)"))
     return True
 
 
@@ -95,11 +95,15 @@ def validate_python_scripts(verbose=False):
             print(f"    - {err}")
         return False
 
-    print(green(f"[✓] Validated {len(py_files)} Python tools (syntax OK)"))
+    print(green(f"[OK] Validated {len(py_files)} Python tools (syntax OK)"))
     return True
 
 
 def validate_shell_scripts(verbose=False):
+    bash = shutil.which('bash')
+    if bash is None:
+        print(red('[-] Shell syntax checks require bash in PATH; checks did not run.'))
+        return False
     sh_files = sorted(
         glob.glob(os.path.join(REPO_ROOT, 'tools/*.sh')) +
         glob.glob(os.path.join(REPO_ROOT, 'shim/*.sh')) +
@@ -109,7 +113,7 @@ def validate_shell_scripts(verbose=False):
 
     for path in sh_files:
         rel = os.path.relpath(path, REPO_ROOT)
-        res = subprocess.run(['bash', '-n', path], capture_output=True, text=True)
+        res = subprocess.run([bash, '-n', path], capture_output=True, text=True)
         if res.returncode != 0:
             errors.append(f"{rel}: {res.stderr.strip()}")
         elif verbose:
@@ -121,7 +125,7 @@ def validate_shell_scripts(verbose=False):
             print(f"    - {err}")
         return False
 
-    print(green(f"[✓] Validated {len(sh_files)} Shell scripts (syntax OK)"))
+    print(green(f"[OK] Validated {len(sh_files)} Shell scripts (syntax OK)"))
     return True
 
 
