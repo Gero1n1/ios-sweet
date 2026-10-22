@@ -22,6 +22,11 @@ on:
       - "xnu/wcn3990/**"
       - "tools/apply-xnu-patches.py"
       - "tools/prepare-xnu-build.py"
+      - "tools/mkpayload.py"
+      - "tools/mkadt.py"
+      - "tools/adt.py"
+      - "tools/fdt.py"
+      - "tests/test_memory.py"
       - ".github/workflows/xnu.yml"
   pull_request:
     paths:
@@ -29,6 +34,11 @@ on:
       - "xnu/wcn3990/**"
       - "tools/apply-xnu-patches.py"
       - "tools/prepare-xnu-build.py"
+      - "tools/mkpayload.py"
+      - "tools/mkadt.py"
+      - "tools/adt.py"
+      - "tools/fdt.py"
+      - "tests/test_memory.py"
       - ".github/workflows/xnu.yml"
 
 permissions:
@@ -96,6 +106,17 @@ jobs:
           # keep going after errors so one run reports every compile failure
           MAKEFLAGS: ${{ inputs.keep_going == 'false' && '' || '-k' }}
         run: bash build.sh
+
+      - name: Validate SWEET payload packing (synthetic RAM layout)
+        if: env.MACHINE_CONFIG == 'SWEET'
+        run: |
+          # No handset DTB or Apple identity data in CI. This checks the actual
+          # linked kernel's packaging, not device memory or boot compatibility.
+          mkdir -p ci-payload-check
+          python3 tools/mkadt.py ci-payload-check/layout.adt --highmem
+          kernels=(dxb/fakeroot/System/Library/Kernels/kernel.*.sweet)
+          test "${#kernels[@]}" -eq 1 && test -f "${kernels[0]}"
+          python3 tools/mkpayload.py "${kernels[0]}" ci-payload-check/layout.adt ci-payload-check/payload.bin
 
       - name: Package build tree for local compiles
         if: always()

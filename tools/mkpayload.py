@@ -199,11 +199,14 @@ def build(kernel_path, adt_path, cmdline=None, ramdisk_path=None):
         buf = bytearray(source.read())
     m = parse_macho(buf)
     for seg in m['segs']:
-        if (seg['filesize'] > seg['vmsize'] or
+        # XNU's ctf_insert adds file-only __CTF debug data with vmsize=0.
+        # It must stay bounded by the file, but is never copied by the shim.
+        if ((seg['vmsize'] and seg['filesize'] > seg['vmsize']) or
                 seg['fileoff'] + seg['filesize'] > len(buf)):
             raise ValueError(f"{seg['name']}: segment data exceeds its memory size or the Mach-O file")
     if m['entry'] is None or not any(
-            seg['vmaddr'] <= m['entry'] < seg['vmaddr'] + seg['filesize'] for seg in m['segs']):
+            seg['vmsize'] and seg['vmaddr'] <= m['entry'] < seg['vmaddr'] + seg['filesize']
+            for seg in m['segs']):
         raise ValueError('kernel entry point is outside file-backed kernel segments')
     nfix = apply_chained_fixups(buf, m)
     segs = [s for s in m['segs'] if s['vmsize']]

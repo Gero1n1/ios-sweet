@@ -277,6 +277,37 @@ class PayloadIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Mach-O file'):
             mkpayload.build(self.path / 'kernel', self.path / 'tree.adt')
 
+    def file_only_ctf(self, truncated=False, entry_in_ctf=False):
+        original = (self.path / 'kernel').read_bytes()
+        binary = bytearray(original[:104])
+        ctf = struct.pack('<II16sQQQQIIII', mkpayload.LC_SEGMENT_64, 72, b'__CTF',
+                          self.base + 0x8000, 0, 464, 16, 0, 0, 0, 0)
+        binary += ctf + original[104:]
+        struct.pack_into('<II', binary, 16, 3, 432)
+        struct.pack_into('<Q', binary, 32 + 48, 464)  # __TEXT file size
+        if entry_in_ctf:
+            struct.pack_into('<Q', binary, 176 + 16 + 32 * 8, self.base + 0x8000)
+        binary += b'CTF debug only!!'
+        self.assertEqual(len(binary), 480)
+        (self.path / 'kernel').write_bytes(binary[:-1] if truncated else binary)
+
+    def test_file_only_ctf_is_bounded_and_excluded_from_payload_segments(self):
+        self.file_only_ctf()
+        blob, info = mkpayload.build(self.path / 'kernel', self.path / 'tree.adt')
+        self.assertEqual(struct.unpack_from('<I', blob, 12)[0], 1)
+        self.assertEqual([seg[0] for seg in info['segs']], ['__TEXT'])
+        self.assertNotIn(b'CTF debug only!!', blob)
+
+    def test_truncated_file_only_ctf_is_rejected(self):
+        self.file_only_ctf(truncated=True)
+        with self.assertRaisesRegex(ValueError, '__CTF.*Mach-O file'):
+            mkpayload.build(self.path / 'kernel', self.path / 'tree.adt')
+
+    def test_file_only_ctf_cannot_supply_kernel_entry(self):
+        self.file_only_ctf(entry_in_ctf=True)
+        with self.assertRaisesRegex(ValueError, 'file-backed kernel segments'):
+            mkpayload.build(self.path / 'kernel', self.path / 'tree.adt')
+
     def test_entry_into_appended_ramdisk_is_rejected(self):
         binary = bytearray((self.path / 'kernel').read_bytes())
         struct.pack_into('<Q', binary, 32 + 72 + 16 + 32 * 8, self.base + 0x4000)
