@@ -1,5 +1,12 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+### UPDATE 2026-10-22 (boot-image input validation)
+
+- Windows installer changes committed/pushed as `7013ecf`. Host CI run `39770590024` passed on Linux and Windows; its Windows job compiled the inert fastboot stub using Clang 20.1.8 and ran all 15 installer tests. Linux ran the 52-test discovery with the 15 Windows-only tests explicitly skipped.
+- Fixed `tools/unpack_bootv2.py`: validate header v0-v2 and supported page sizes, exact version-specific header size, nonempty kernel, all component file bounds, aligned offsets and overlapping components before creating output. Honor the declared recovery-DTBO offset instead of assuming sequential data. Refuse nonempty output directories to prevent stale DTBs from a previous extraction. Existing CLI invocation and `header.txt` format remain available; these checks do not verify signatures or hardware boot suitability.
+- Eleven new synthetic-layout tests pass for v0/v1/v2 and all four supported page sizes, truncated headers/components, size/offset overflow, overlap, recovery positioning, stale output and clean CLI errors. Full local suite after this change: 63 tests passed, no skips. Repository validator still passes 83 patches, 18 Python tools and 9 shell scripts.
+- Attempted a read-only SSH backup of the running Android boot partition; it timed out after 60 seconds and no complete backup was saved. Do not treat this as an OrangeFox backup or a valid boot-image input. No device write/boot occurred.
+
 ### UPDATE 2026-10-22 (full kernel build, live memory map and Windows installer)
 
 - Commits: `ffaf55d` restores the supplied patch snapshot; `42520d7` implements/stages WLFW and strict required-patch application; `ad80413` enables full kernel checks for pull requests. Draft PR in the user's fork: <https://github.com/Gero1n1/ios-sweet/pull/1>. Nothing has been merged upstream.

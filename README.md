@@ -67,6 +67,11 @@ The shim needs the stock DTB. Unpack your phone's stock `boot.img`:
 python3 tools/unpack_bootv2.py backup/boot.img dtb/boot_unpacked   # -> dtb/boot_unpacked/dtb
 ```
 
+Use a new or empty output directory. The unpacker checks v0-v2 header/page
+sizes, component bounds and overlaps before creating output; it rejects
+truncated images and preserves existing output. These checks do not verify
+boot signatures or establish that an image is safe to boot on sweet.
+
 ### 1. Build the kernel
 
 The kernel builds on GitHub's macOS runners with [blacktop/darwin-xnu-build](https://github.com/blacktop/darwin-xnu-build). The workflow fetches xnu-8796, applies `xnu/patches/` in order, and also stages the pinned open-source libpthread, HFS and BearSSL sources it needs. Fork the repo (public repos get free macOS minutes) and run:
