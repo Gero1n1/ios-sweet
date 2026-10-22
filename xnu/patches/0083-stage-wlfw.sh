@@ -6,7 +6,7 @@ source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sweet-wcn3990"
 target=bsd/dev/sweet_wcn3990
 [[ -f bsd/conf/files ]] || { echo 'Not an XNU source root' >&2; exit 1; }
 [[ ! -e "$target" ]] || { echo "Refusing to overwrite $target" >&2; exit 1; }
-sources=(wlfw_wire.c wlfw_wire.h glink_smem.c glink_smem.h smem_view.c smem_view.h)
+sources=(wlfw_wire.c wlfw_wire.h glink_smem.c glink_smem.h smem_view.c smem_view.h glink_control.c glink_control.h)
 for source in "${sources[@]}"; do
     [[ -f "$source_dir/$source" ]] || {
         echo "Missing canonical WLAN source: $source" >&2

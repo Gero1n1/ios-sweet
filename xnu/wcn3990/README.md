@@ -32,8 +32,8 @@ the build log confirms `wlfw_wire.c` compilation. This is not a phone test.
 The staged translation unit was cross-compiled to a Mach-O ARM64 object with
 the actual XNU headers using Zig 0.17.0's Clang frontend (`KERNEL` and
 `ARM64_BOARD_CONFIG_SWEET`, freestanding, no SDK includes). Its seven public
-functions are present with no undefined symbols. This is a single-file check,
-a single-file check; the later full build is recorded above.
+functions are present with no undefined symbols. That was a single-file check;
+the later full build is recorded above.
 Host compilation and schema fixtures do not test a radio, firmware boot, QRTR
 transport or Apple's Wi-Fi ABI. The
 remaining driver needs power/remoteproc, SMEM/GLINK or the applicable IPC
@@ -76,7 +76,7 @@ it never resets the remote-owned indices. It implements:
 The platform must supply shared non-cacheable mappings, SMEM allocation under
 the correct remote lock, mailbox and IRQ handling, and restart/lifetime
 synchronization. The implementation is not bound to physical hardware yet.
-Native GLINK version/channel/intent negotiation, QRTR and remote-processor
+Native GLINK channel/intent negotiation, QRTR and remote-processor
 startup remain missing. It cannot yet carry WLFW messages on the handset.
 No caller has sent a command to Android's live firmware.
 
@@ -104,3 +104,26 @@ are still required before any on-device use.
 
 Format reference: pinned sweet
 [SMEM implementation](https://github.com/ArrowOS-Devices/android_kernel_xiaomi_sweet/blob/b2dab9baf54310ed2987689f8398a75836f3bd22/drivers/soc/qcom/smem.c).
+
+## GLINK version negotiation
+
+`glink_control.c` (patch 0087) connects GLINK v1 VERSION/ACK negotiation to the
+actual FIFO transport. It advertises zero optional features: intent reuse and
+intentless transfers must not be enabled before their implementations exist.
+It handles version counter-offers, duplicate messages and READ_NOTIF, publishing
+the RX tail before ringing the mailbox. Unknown channel commands remain in RX.
+A blocked reply stays queued locally across retries; receiving it is never
+mistaken for successful transmission. Each call performs bounded work.
+
+Eight C11/C++14 test groups include two connected peers, exact wire vectors,
+every aligned ring position, TX saturation and later recovery, version-zero
+rejection, unsupported features, malformed indices and aliased state rejection.
+These use shared arrays, not a DSP. Platform code still needs IRQ scheduling,
+negotiation deadlines and restart detection; a VERSION packet cannot establish
+whether a remote processor restarted. `ready` means only the local version offer
+was acknowledged. No channel, intent, QRTR service or Wi-Fi interface is created.
+
+Protocol facts were checked against the public
+[GLINK native implementation, Linux v6.12](https://github.com/torvalds/linux/blob/v6.12/drivers/rpmsg/qcom_glink_native.c).
+The new implementation is independent MIT code; Linux implementation code was
+not incorporated.
