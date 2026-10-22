@@ -14,9 +14,11 @@ static void shared_barrier(void)
 #endif
 }
 
-static uint32_t read32(volatile uint8_t *base, size_t offset)
+/* All callers validate a 4-byte-aligned mapping and aligned field offsets. */
+static uint32_t read32(volatile void *base, size_t offset)
 {
-    uint32_t value = *(volatile uint32_t *)(base + offset);
+    volatile uint32_t *words = (volatile uint32_t *)base;
+    uint32_t value = words[offset / 4u];
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
     value = __builtin_bswap32(value);
 #endif
@@ -140,7 +142,7 @@ int sweet_glink_smem_bind_existing(struct sweet_glink_smem *out,
     result = sweet_smem_find_uncached(mapping, bytes, remote_host, SWEET_GLINK_RX_ITEM, &rx);
     if (result != SWEET_GLINK_OK)
         return result;
-    return sweet_glink_smem_bind(out, (volatile uint32_t *)descriptor.data, descriptor.size,
+    return sweet_glink_smem_bind(out, (volatile uint32_t *)(volatile void *)descriptor.data, descriptor.size,
         tx.data, tx.size, rx.data, rx.size, notify, context);
 }
 #endif
