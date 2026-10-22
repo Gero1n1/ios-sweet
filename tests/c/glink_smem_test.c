@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "glink_smem.h"
+#include "smem_view.h"
 
 static uint32_t descriptor[8];
 static uint8_t tx[64], rx[64];
@@ -229,6 +230,140 @@ static void exhaustive(void)
     }
 }
 
+static uint32_t smem_words[2048];
+
+static void put16(uint8_t *base, size_t offset, uint16_t value)
+{
+    base[offset] = (uint8_t)value;
+    base[offset + 1] = (uint8_t)(value >> 8);
+}
+
+static void put32(uint8_t *base, size_t offset, uint32_t value)
+{
+    unsigned i;
+    for (i = 0; i < 4; ++i) base[offset + i] = (uint8_t)(value >> (8 * i));
+}
+
+static uint8_t *smem_fixture(void)
+{
+    uint8_t *s = (uint8_t *)smem_words;
+    const uint16_t items[] = {478, 479, 480};
+    const uint32_t sizes[] = {32, 64, 64};
+    size_t entry = 512 + 32;
+    unsigned i;
+    memset(smem_words, 0, sizeof(smem_words));
+    put32(s, 92, 12);
+    put32(s, 192, 1);
+    memcpy(s + 4096, "$TOC", 4);
+    put32(s, 4096 + 4, 1);
+    put32(s, 4096 + 8, 1);
+    put32(s, 4096 + 32, 512);
+    put32(s, 4096 + 36, 2048);
+    put16(s, 4096 + 44, 0);
+    put16(s, 4096 + 46, 1);
+    put32(s, 4096 + 48, 32);
+    memcpy(s + 512, "$PRT", 4);
+    put16(s, 512 + 4, 0);
+    put16(s, 512 + 6, 1);
+    put32(s, 512 + 8, 2048);
+    put32(s, 512 + 16, 2048);
+    for (i = 0; i < 3; ++i) {
+        put16(s, entry, 0xa5a5);
+        put16(s, entry + 2, items[i]);
+        put32(s, entry + 4, sizes[i]);
+        entry += 16 + sizes[i];
+    }
+    put32(s, 512 + 12, (uint32_t)(entry - 512));
+    return s;
+}
+
+static void smem_notify(void *context)
+{
+    uint8_t *s = (uint8_t *)smem_words;
+    static const uint8_t packet[8] = {0, 0, 1, 0, 0, 0, 0, 0};
+    assert(context == &notifications);
+    assert(smem_words[560 / 4 + 1] == 8);
+    assert(memcmp(s + 608, packet, 8) == 0);
+    ++notifications;
+}
+
+static void smem(void)
+{
+    uint8_t *s = smem_fixture();
+    struct sweet_smem_view view;
+    struct sweet_glink_smem bound;
+    static const uint8_t packet[8] = {0, 0, 1, 0, 0, 0, 0, 0};
+    assert(sweet_smem_find_uncached(s, 8192, 1, 478, &view) == SWEET_GLINK_OK);
+    assert(view.data == s + 560 && view.size == 32);
+    assert(sweet_smem_find_uncached(s, 8192, 1, 479, &view) == SWEET_GLINK_OK);
+    assert(view.data == s + 608 && view.size == 64);
+    assert(sweet_smem_find_uncached(s, 8192, 1, 480, &view) == SWEET_GLINK_OK);
+    assert(view.data == s + 688 && view.size == 64);
+    notifications = 0;
+    assert(sweet_glink_smem_bind_existing(&bound, s, 8192, 1, smem_notify,
+        &notifications) == SWEET_GLINK_OK);
+    assert(sweet_glink_smem_send(&bound, packet, sizeof(packet)) == SWEET_GLINK_OK);
+    assert(notifications == 1);
+    s = smem_fixture();
+    put16(s, 4096 + 44, 1); put16(s, 4096 + 46, 0);
+    put16(s, 512 + 4, 1); put16(s, 512 + 6, 0);
+    assert(sweet_smem_find_uncached(s, 8192, 1, 478, &view) == SWEET_GLINK_OK);
+    put16(s, 544 + 8, 8); /* allocated 32, logical 24 */
+    assert(sweet_smem_find_uncached(s, 8192, 1, 478, &view) == SWEET_GLINK_OK && view.size == 24);
+    assert(sweet_glink_smem_bind_existing(&bound, s, 8192, 1, smem_notify,
+        &notifications) == SWEET_GLINK_ARGUMENT);
+    s = smem_fixture();
+    memmove(s + 568, s + 560, 32);
+    put16(s, 544 + 10, 8); /* allowed padding between header and data */
+    put32(s, 512 + 12, 88); /* only this item is published */
+    assert(sweet_smem_find_uncached(s, 8192, 1, 478, &view) == SWEET_GLINK_OK);
+    assert(view.data == s + 568 && view.size == 32);
+}
+
+static void smem_malformed(void)
+{
+    /* Mutate bounds/canaries after and before the requested item too. */
+    static const size_t offsets[] = {192, 204, 4096, 4104, 4128, 4132,
+        512, 520, 524, 528, 544, 548, 552, 554, 672, 676};
+    struct sweet_smem_view view;
+    struct sweet_glink_smem bound, saved;
+    unsigned i;
+    uint8_t *s;
+    memset(&saved, 0x44, sizeof(saved));
+    for (i = 0; i < sizeof(offsets) / sizeof(offsets[0]); ++i) {
+        s = smem_fixture();
+        put32(s, offsets[i], UINT32_MAX);
+        view.data = NULL; view.size = 777;
+        bound = saved;
+        assert(sweet_smem_find_uncached(s, 8192, 1, 478, &view) != SWEET_GLINK_OK);
+        assert(view.data == NULL && view.size == 777);
+        assert(sweet_glink_smem_bind_existing(&bound, s, 8192, 1, smem_notify,
+            &notifications) != SWEET_GLINK_OK);
+        assert(memcmp(&bound, &saved, sizeof(bound)) == 0);
+    }
+    s = smem_fixture();
+    put32(s, 92, 10);
+    assert(sweet_smem_find_uncached(s, 8192, 1, 478, &view) == SWEET_SMEM_UNSUPPORTED);
+    s = smem_fixture();
+    put16(s, 674, 478); /* duplicate item */
+    assert(sweet_smem_find_uncached(s, 8192, 1, 478, &view) == SWEET_SMEM_FORMAT);
+    s = smem_fixture();
+    put32(s, 4104, 2);
+    memcpy(s + 4096 + 80, s + 4096 + 32, 48); /* duplicate AP/modem partition */
+    assert(sweet_smem_find_uncached(s, 8192, 1, 478, &view) == SWEET_SMEM_FORMAT);
+    s = smem_fixture();
+    assert(sweet_smem_find_uncached(s, 8192, 2, 478, &view) == SWEET_SMEM_NOT_FOUND);
+    assert(sweet_smem_find_uncached(s, 8192, 1, 999, &view) == SWEET_SMEM_NOT_FOUND);
+    assert(sweet_smem_find_uncached(s, 8192, 0, 478, &view) == SWEET_SMEM_ARGUMENT);
+    assert(sweet_smem_find_uncached(s + 1, 8192, 1, 478, &view) == SWEET_SMEM_ARGUMENT);
+    assert(sweet_smem_find_uncached(s, 8191, 1, 478, &view) == SWEET_SMEM_ARGUMENT);
+    assert(sweet_smem_find_uncached(s, SIZE_MAX, 1, 478, &view) == SWEET_SMEM_ARGUMENT);
+    assert(sweet_smem_find_uncached(s, 8192, 1, 478,
+        (struct sweet_smem_view *)(s + 768)) == SWEET_SMEM_ARGUMENT);
+    assert(sweet_glink_smem_bind_existing((struct sweet_glink_smem *)(s + 768),
+        s, 8192, 1, smem_notify, &notifications) == SWEET_SMEM_ARGUMENT);
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -238,6 +373,8 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "receive")) receive();
     else if (!strcmp(argv[1], "corruption")) corruption();
     else if (!strcmp(argv[1], "exhaustive")) exhaustive();
+    else if (!strcmp(argv[1], "smem")) smem();
+    else if (!strcmp(argv[1], "smem-malformed")) smem_malformed();
     else return 2;
     puts("PASS");
     return 0;

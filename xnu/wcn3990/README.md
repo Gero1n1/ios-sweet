@@ -87,3 +87,20 @@ incorporated. Host tests exercise the actual C/C++ transport using memory-backed
 rings, including every aligned head/tail pair in a 64-byte FIFO, frame lengths
 8–65, padding, saturation, notification reserve, corruption and callback order.
 Those tests do not verify cache attributes or ordering against a real DSP.
+
+`smem_view.c` (patch 0085) now reads existing uncached private-heap items from
+an AP/remote partition of a primary SMEM v11/v12 mapping. It validates the
+partition table, host pair, partition size/free offsets, entry canaries,
+padding, item boundaries and duplicate items before returning a view.
+`sweet_glink_smem_bind_existing()` resolves items 478–480 and binds those actual
+views to the FIFO transport without resetting shared state. Tests exercise the
+whole lookup/bind/send path on a synthetic SMEM heap, plus malformed metadata.
+
+It does not allocate missing SMEM items, handle cached/global/auxiliary heaps,
+or acquire the hardware allocation lock. NOT_FOUND means no matching uncached
+item was found in the selected private partition, not that Android lacks SMEM
+or the WLAN service. Platform mapping, restart exclusion and mailbox/IRQ binding
+are still required before any on-device use.
+
+Format reference: pinned sweet
+[SMEM implementation](https://github.com/ArrowOS-Devices/android_kernel_xiaomi_sweet/blob/b2dab9baf54310ed2987689f8398a75836f3bd22/drivers/soc/qcom/smem.c).

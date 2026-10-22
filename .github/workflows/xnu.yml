@@ -72,7 +72,7 @@ jobs:
           # 12.5-14.3 use the top-level patches dir; ours go next to blacktop's
           cp xnu/patches/*.patch xnu/patches/*.sh dxb/patches/
           mkdir -p dxb/patches/sweet-wcn3990
-          cp xnu/wcn3990/wlfw_wire.c xnu/wcn3990/wlfw_wire.h xnu/wcn3990/glink_smem.c xnu/wcn3990/glink_smem.h dxb/patches/sweet-wcn3990/
+          cp xnu/wcn3990/*.[ch] dxb/patches/sweet-wcn3990/
           # DXB normally skips failed patches. Every SWEET patch must apply.
           cp tools/apply-xnu-patches.py dxb/sweet-apply-patches.py
           python3 - <<'PY'

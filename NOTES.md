@@ -1,5 +1,14 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+### UPDATE 2026-10-22 (SMEM private-heap lookup connected to GLINK)
+
+- GLINK ring transport committed/pushed as `5fb00f5`. Linux/Windows host CI runs `39773242446` and `39773237099` passed; full kernel run `39773242460` is still in progress at this milestone.
+- Implemented `smem_view.{c,h}` and patch 0085. The reader validates initialized SMEM v11/v12 primary mappings, `$TOC` version/count, AP/remote host pairing, `$PRT` bounds, free offsets, entry canaries, padding, duplicate items and data spans. It returns existing uncached item views only after a complete valid scan. It does not modify the heap or allocate items.
+- `sweet_glink_smem_bind_existing()` now resolves descriptor/FIFOs 478/479/480 from that heap and binds them directly to the transport. It rejects output structures overlapping the shared mapping and preserves caller state on failure. This is a functional source connection between SMEM lookup and FIFO transfer, not an automatically started or hardware-bound WLAN driver.
+- Actual C11/C++14 integration tests construct a schema-derived SMEM private heap, locate all three items and send through the resulting FIFO, checking that the notifier sees fully published data/head. Additional cases cover reversed host order, header/data padding, logical vs allocated sizes, malformed metadata even after the requested item, duplicate heaps/items, unsupported versions, missing items, alignment, truncated mappings, overflow and output preservation.
+- Full local suite now passes 74 tests without skips; validator passes 85 patches, 18 Python tools and 9 shell scripts. The SMEM reader cross-compiles with actual XNU headers as an ARM64 Mach-O object; patch 0085 passes `git apply --check` on the source tree with 0084 applied. Full kernel build/link with 0085 remains pending.
+- The reader deliberately does not fall back to cached/global/auxiliary heaps. NOT_FOUND does not establish an absent Android service or driver. Allocation under TCSR hwlock 3, physical mappings, restart exclusion, mailbox/IRQ binding, GLINK negotiation and QRTR remain required before it can communicate with WLAN firmware on sweet.
+
 ### UPDATE 2026-10-22 (driver work: GLINK transport and GPU source discovery)
 
 - Owner explicitly requested researching forums and writing the missing drivers. Focus remains hardware code; no phone flash, boot, GPU register write or initialization request to Android's WLAN firmware was performed.

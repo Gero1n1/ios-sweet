@@ -16,7 +16,7 @@ class GlinkSmemTests(unittest.TestCase):
         cls.directory = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.directory.cleanup)
         cls.path = Path(cls.directory.name)
-        for name in ('glink_smem.c', 'glink_smem.h'):
+        for name in ('glink_smem.c', 'glink_smem.h', 'smem_view.c', 'smem_view.h'):
             shutil.copyfile(ROOT / 'xnu/wcn3990' / name, cls.path / name)
         shutil.copyfile(ROOT / 'tests/c/glink_smem_test.c', cls.path / 'test.c')
         cls.binaries = []
@@ -26,7 +26,7 @@ class GlinkSmemTests(unittest.TestCase):
         for compiler, standard in compilers:
             binary = cls.path / (compiler.replace('+', 'p') + ('.exe' if os.name == 'nt' else ''))
             result = subprocess.run([compiler, standard, '-pedantic', '-Wall', '-Wextra',
-                                     '-Werror', '-O2', 'glink_smem.c', 'test.c', '-o', str(binary)],
+                                     '-Werror', '-O2', 'glink_smem.c', 'smem_view.c', 'test.c', '-o', str(binary)],
                                     cwd=cls.path, capture_output=True, text=True)
             if result.returncode:
                 raise AssertionError(result.stdout + result.stderr)
@@ -45,3 +45,5 @@ class GlinkSmemTests(unittest.TestCase):
     def test_rx_peek_bounds_and_explicit_consumption(self): self.case('receive')
     def test_corrupt_indices_and_size_overflow_do_not_change_memory(self): self.case('corruption')
     def test_every_aligned_position_and_frame_size_in_small_fifo(self): self.case('exhaustive')
+    def test_real_smem_layout_lookup_and_fifo_binding(self): self.case('smem')
+    def test_corrupt_smem_metadata_and_truncation(self): self.case('smem-malformed')
