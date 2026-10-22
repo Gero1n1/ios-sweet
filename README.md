@@ -10,7 +10,7 @@ As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock 
 
 The boot and hardware results below are the upstream author's historical results.
 For the current owner's handset, still running Android, the 2026-10-22 checks
-confirm a successful full XNU build, 95 local host tests and safe upper-RAM
+confirm a successful full XNU build, 103 local host tests and safe upper-RAM
 selection from its live device tree. A 90-second Windows QEMU run reached a
 minimal test PID 1 on a RAM disk; this did not run Apple's iOS userland or model
 the phone's Wi-Fi/GPU. This kernel has not been booted on that handset.

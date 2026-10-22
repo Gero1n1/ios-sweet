@@ -61,3 +61,9 @@ the final screen contained 73 test-program `still alive` lines, zero unknown
 glyphs and no visible panic; the log cap was not reached. This supports using
 the instruction clock for further kernel experiments. It does not resolve
 the default-clock failure or prove the host scheduling hypothesis.
+
+The later 0087 kernel also ran for 90.53 host seconds with shift 0 and 73
+visible `still alive` lines, without a visible panic or log-cap hit. Its
+artifact hash and CI run are recorded in `NOTES.md`. Newer driver components
+still need their own full build/test results; this does not execute radio or
+GPU initialization.

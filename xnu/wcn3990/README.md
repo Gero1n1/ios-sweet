@@ -127,3 +127,30 @@ Protocol facts were checked against the public
 [GLINK native implementation, Linux v6.12](https://github.com/torvalds/linux/blob/v6.12/drivers/rpmsg/qcom_glink_native.c).
 The new implementation is independent MIT code; Linux implementation code was
 not incorporated.
+
+## Named channel lifecycle
+
+`glink_channel.c` (patch 0088) adds one endpoint's OPEN/OPEN_ACK/CLOSE/CLOSE_ACK
+lifecycle on the negotiated edge. For the observed modem edge the endpoint
+name is `IPCRTR`; local and remote channel IDs are independent. The caller
+allocates the local ID and owns the endpoint lifetime. Names and message
+lengths are bounded, including wrapped and partially available OPEN messages.
+Remote-initiated OPEN is acknowledged before publishing our own OPEN.
+
+Both halves of the opening handshake must finish before `channel_ready`.
+Pending confirmations survive a full TX ring. A remote CLOSE initiates our
+own close; `channel_closed` requires the necessary close acknowledgements to
+be published/received. No shared memory, ID or buffer is freed automatically.
+Parent negotiation loss invalidates the channel until explicit reinitialization.
+Unknown/other-channel commands remain queued for an edge-level dispatcher.
+
+Eight C11/C++14 test groups exercise two peers through negotiation, opening
+and graceful closure, remote-first ordering, early aborts, duplicate commands,
+backpressure during both open and close, malformed/partial frames, every name
+length 2..32 at every aligned position in a 64-byte FIFO, and parent invalidation.
+They run on host memory, not on a modem. There is still no intent allocation,
+data transfer, QRTR packet routing, platform binding or WLAN firmware startup.
+
+Wire semantics were also checked against the pinned sweet
+[GLINK native driver](https://github.com/ArrowOS-Devices/android_kernel_xiaomi_sweet/blob/b2dab9baf54310ed2987689f8398a75836f3bd22/drivers/rpmsg/qcom_glink_native.c).
+The source here is independently written MIT code, not a Linux driver copy.
