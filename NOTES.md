@@ -1,5 +1,11 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+### OWNER PRIORITY 2026-10-22 (native Wi-Fi and GPU)
+
+- Owner explicitly objected to time spent on installer/build/tooling instead of working native Wi-Fi and GPU. Acknowledged that neither feature is implemented and that full kernel build/host checks are preparation, not evidence of those functions. Do not keep extending ancillary tooling as a substitute for hardware work, and do not promise a delivery date or daily-use readiness.
+- Completed packaging regression fix is `1402fcd`; full suite locally passes 66 tests. Post-fix kernel+packing CI is run `39771476001`; host CI runs are `39771476073` (PR) and `39771469166` (push). Final statuses must be checked before reporting them as passed.
+- Next substantive Wi-Fi work is a real remote-processor/SMEM/GLINK/QRTR path feeding WLFW, with safe MSA ownership; the current codec has no caller. Next substantive GPU work must establish how Adreno command submission and its userspace graphics driver can integrate with this iOS 16 image. There is no Adreno/Metal implementation in this repository. Neither gap is solved by another configuration flag or by recompiling the kernel.
+
 ### UPDATE 2026-10-22 (real-kernel payload regression found and fixed)
 
 - Downloaded only `Firmware/all_flash/DeviceTree.d22ap.im4p` (33,719 bytes, ZIP CRC-32 checked) through HTTP ranges from Apple's iPhone X 16.7.16 / 20H392 IPSW CDN. Built Apple's public LZFSE utility locally, unwrapped/decompressed using `tools/adt.py`, and parsed the complete 186,084-byte ADT (SHA-256 `9e670987c80493bd69aba7be62e3179c04663324d9249b0973675baac175dbf1`). Its `/product` contributes 61 non-placeholder properties. All Apple files remain ignored under `research/`; none are committed.
